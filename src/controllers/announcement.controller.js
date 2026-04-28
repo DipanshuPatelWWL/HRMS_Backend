@@ -1,5 +1,6 @@
 const Announcement = require("../models/announcement.model");
 const User = require("../models/user.model");
+const { createNotification } = require("./notification.controller");
 
 // ─── CREATE (HR / Manager) ───────────────────────────────────────────────────
 const createAnnouncement = async (req, res) => {
@@ -29,14 +30,42 @@ const createAnnouncement = async (req, res) => {
 
         const io = req.app.get("io");
 
-        // 🎯 If specific users selected
+        // ── Socket emit (your existing logic — kept as is) ──────────────────
         if (targetUsers && targetUsers.length > 0) {
             targetUsers.forEach((userId) => {
                 io.to(userId.toString()).emit("newAnnouncement", populated);
             });
         } else {
-            // 📢 Send to all
             io.emit("newAnnouncement", populated);
+        }
+
+        // ── Notifications ────────────────────────────────────────────────────
+        const notifTitle = `📢 ${title}`;
+        const notifMessage = body?.slice(0, 100);
+        const meta = { announcementId: announcement._id };
+
+        if (targetUsers && targetUsers.length > 0) {
+            // Notify only the selected users
+            await Promise.allSettled(
+                targetUsers.map(userId =>
+                    createNotification(io, userId, notifTitle, notifMessage, "announcement", meta)
+                )
+            );
+        } else {
+            // Notify all users matching the targetRole
+            const roleFilter = targetRole === "all"
+                ? {}
+                : { role: targetRole };
+
+            const users = await User.find(roleFilter).select("_id").lean();
+
+            await Promise.allSettled(
+                users
+                    .filter(u => u._id.toString() !== req.user._id.toString()) // don't notify yourself
+                    .map(u =>
+                        createNotification(io, u._id, notifTitle, notifMessage, "announcement", meta)
+                    )
+            );
         }
 
         res.status(201).json({
@@ -55,15 +84,13 @@ const getAnnouncements = async (req, res) => {
         const userRole = req.user.role;
         const userId = req.user._id;
 
-
-        // Build query
         const filter = {
             $and: [
                 {
                     $or: [
                         { targetRole: "all" },
                         { targetRole: userRole },
-                        { targetUsers: userId }, // 🎯 important
+                        { targetUsers: userId },
                     ],
                 },
                 {
@@ -79,7 +106,6 @@ const getAnnouncements = async (req, res) => {
             .populate("createdBy", "name role")
             .sort({ pinned: -1, createdAt: -1 });
 
-        // Mark which ones the user has read
         const withRead = announcements.map((a) => ({
             ...a.toObject(),
             isRead: a.readBy.some(
@@ -144,18 +170,12 @@ const getSingleAnnouncement = async (req, res) => {
             );
         }
 
-        // ✅ Remove duplicates from readBy
         const uniqueReadMap = new Map();
-
         announcement.readBy.forEach((u) => {
             uniqueReadMap.set(u._id.toString(), u);
         });
-
         const uniqueRead = Array.from(uniqueReadMap.values());
-
-        // Extract unique IDs
         const readIds = uniqueRead.map(u => u._id.toString());
-
         const creatorId = announcement.createdBy._id.toString();
 
         const notRead = allUsers.filter(
@@ -164,16 +184,14 @@ const getSingleAnnouncement = async (req, res) => {
                 u._id.toString() !== creatorId
         );
 
-        const analytics = {
-            read: uniqueRead,
-            notRead,
-            total: allUsers.length,
-        };
-
         res.json({
             success: true,
             announcement,
-            analytics,
+            analytics: {
+                read: uniqueRead,
+                notRead,
+                total: allUsers.length,
+            },
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -192,7 +210,6 @@ const markAsRead = async (req, res) => {
             });
         }
 
-        // Add user to readBy if not already there
         if (!announcement.readBy.some(
             (id) => id.toString() === req.user._id.toString()
         )) {
@@ -200,10 +217,7 @@ const markAsRead = async (req, res) => {
             await announcement.save();
         }
 
-        res.status(200).json({
-            success: true,
-            message: "Marked as read",
-        });
+        res.status(200).json({ success: true, message: "Marked as read" });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -236,6 +250,10 @@ const updateAnnouncement = async (req, res) => {
         const populated = await Announcement.findById(announcement._id)
             .populate("createdBy", "name email role");
 
+        // Emit update event so frontend lists refresh in real-time
+        const io = req.app.get("io");
+        io.emit("updatedAnnouncement", populated);
+
         res.status(200).json({
             success: true,
             message: "Announcement updated",
@@ -258,16 +276,17 @@ const deleteAnnouncement = async (req, res) => {
             });
         }
 
-        res.status(200).json({
-            success: true,
-            message: "Announcement deleted",
-        });
+        // Emit delete event so frontend removes it instantly
+        const io = req.app.get("io");
+        io.emit("deletedAnnouncement", req.params.id);
+
+        res.status(200).json({ success: true, message: "Announcement deleted" });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// ─── GET UNREAD COUNT (for notification badge) ───────────────────────────────
+// ─── GET UNREAD COUNT ────────────────────────────────────────────────────────
 const getUnreadCount = async (req, res) => {
     try {
         const userRole = req.user.role;
@@ -282,9 +301,7 @@ const getUnreadCount = async (req, res) => {
                         { targetUsers: userId },
                     ],
                 },
-                {
-                    readBy: { $ne: userId },
-                },
+                { readBy: { $ne: userId } },
                 {
                     $or: [
                         { expiresAt: null },

@@ -2,6 +2,7 @@ const Attendance = require("../models/attendance.model");
 const User = require("../models/user.model");
 const Holiday = require("../models/holiday.model");
 const Leave = require("../models/leave.model");
+const { createNotification, broadcastNotification } = require("./notification.controller");
 
 // ─────────────────────────────────────────────
 //  OFFICE CONFIG
@@ -38,6 +39,13 @@ const getDistance = (lat1, lng1, lat2, lng2) => {
         Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
+
+const formatTime = (date) =>
+    new Date(date).toLocaleTimeString("en-IN", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true,
+    });
 
 
 // ─────────────────────────────────────────────
@@ -217,6 +225,39 @@ const punchIn = async (req, res) => {
             syncedAt: isOfflinePunch ? new Date() : null,
         });
 
+
+        // ── Notify HR ────────────────────────────────────────────────────────
+        const io = req.app.get("io");
+        const employeeName = req.user.name || "An employee";
+        const punchTime = formatTime(now);
+
+        // Build a smart status label for HR
+        let statusLabel = "✅ On Time";
+        if (isHalfDay) statusLabel = "⚠️ Half Day";
+        else if (isLate) statusLabel = `⏰ Late (+${lateMinutes}m)`;
+
+        await broadcastNotification(
+            io,
+            ["hr", "manager"],                              // who gets it
+            `${employeeName} Punched In`,                   // title
+            `Punched in at ${punchTime} — ${statusLabel}`,  // message
+            "attendance",                                    // type
+            { userId, attendanceId: attendance._id, status, isLate, isHalfDay }
+        );
+
+        // ── Also notify TL of the employee (if reportingTo is set) ──────────
+        const employeeDoc = await User.findById(userId).select("reportingTo").lean();
+        if (employeeDoc?.reportingTo) {
+            await createNotification(
+                io,
+                employeeDoc.reportingTo,
+                `${employeeName} Punched In`,
+                `Punched in at ${punchTime} — ${statusLabel}`,
+                "attendance",
+                { userId, attendanceId: attendance._id, status }
+            );
+        }
+
         res.status(201).json({
             success: true,
             message: "Punch-in successful",
@@ -316,6 +357,45 @@ const punchOut = async (req, res) => {
 
         await attendance.save();
 
+
+        // ── Notify HR ────────────────────────────────────────────────────────
+        const io = req.app.get("io");
+        const employeeName = req.user.name || "An employee";
+        const punchTime = formatTime(now);
+
+        // Build work hours label
+        const hrs = Math.floor(workHours);
+        const mins = Math.round((workHours - hrs) * 60);
+        const workLabel = `${hrs}h ${mins}m worked`;
+
+        // Overtime label
+        const overtimeLabel = overtime > 0
+            ? ` · OT: ${Math.floor(overtime / 60)}h ${Math.round(overtime % 60)}m`
+            : "";
+
+        await broadcastNotification(
+            io,
+            ["hr", "manager"],
+            `${employeeName} Punched Out`,
+            `Punched out at ${punchTime} — ${workLabel}${overtimeLabel}`,
+            "attendance",
+            { userId, attendanceId: attendance._id, workHours, overtime }
+        );
+
+        // ── Also notify TL ───────────────────────────────────────────────────
+        const employeeDoc = await User.findById(userId).select("reportingTo").lean();
+        if (employeeDoc?.reportingTo) {
+            await createNotification(
+                io,
+                employeeDoc.reportingTo,
+                `${employeeName} Punched Out`,
+                `Punched out at ${punchTime} — ${workLabel}${overtimeLabel}`,
+                "attendance",
+                { userId, attendanceId: attendance._id, workHours }
+            );
+        }
+
+
         res.status(200).json({
             success: true,
             message: "Punch-out successful",
@@ -354,6 +434,17 @@ const overrideAttendance = async (req, res) => {
         attendance.overriddenBy = req.user._id;
 
         await attendance.save();
+
+        // ── Notify the employee that their attendance was fixed ──────────────
+        const io = req.app.get("io");
+        await createNotification(
+            io,
+            attendance.user._id,
+            "Attendance Overridden ✅",
+            `Your attendance for ${new Date(attendance.date).toDateString()} was corrected by HR`,
+            "attendance",
+            { attendanceId: attendance._id }
+        );
 
         res.status(200).json({
             success: true,
