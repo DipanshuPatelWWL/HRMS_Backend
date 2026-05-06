@@ -7,10 +7,11 @@ const allowRoles = require("../middleware/role.middleware");
 const {
     punchIn,
     punchOut,
-    overrideAttendance,
     getTodayAttendance,
     getMonthlyAttendance,
-    getWeeklyAttendanceSummary
+    getWeeklyAttendanceSummary,
+    getTeamAttendance,
+    getHRAttendanceOverview
 } = require("../controllers/attendance.controller");
 
 router.post(
@@ -27,15 +28,11 @@ router.post(
     punchOut
 );
 
-router.put(
-    "/override/:id",
-    protect,
-    allowRoles("hr", "superadmin"),
-    overrideAttendance
-);
 
 router.get("/today", protect, getTodayAttendance);
 router.get("/monthly", protect, getMonthlyAttendance);
-router.get("/weekly-summary", protect, allowRoles("hr", "superadmin"), getWeeklyAttendanceSummary);
+router.get("/weekly-summary", protect, allowRoles("hr", "manager", "superadmin"), getWeeklyAttendanceSummary);
+router.get("/team", protect, allowRoles("tl"), getTeamAttendance);
+router.get("/hr-overview", protect, allowRoles("hr", "manager", "superadmin"), getHRAttendanceOverview);
 
 module.exports = router;

@@ -17,9 +17,6 @@ const accrueMonthlyLeave = async () => {
             }
         );
 
-        console.log(
-            `[LeaveAccrual] ${now.toISOString()} — credited 1 casual leave to ${result.modifiedCount} employees`
-        );
     } catch (error) {
         console.error("[LeaveAccrual] Error:", error.message);
     }

@@ -1,7 +1,7 @@
 const User = require("../models/user.model");
 const bcrypt = require("bcryptjs");
-const { validateGovernmentId } = require("../utils/validators/governmentId.validator");
 const { validateBankDetails } = require("../utils/validators/bankDetails.validator");
+const { notifyWelcome } = require("../services/emailNotify");
 
 
 // ─────────────────────────────────────────────
@@ -42,13 +42,28 @@ const generateEmployeeId = async (name) => {
 // ─────────────────────────────────────────────
 const createUserByHR = async (req, res) => {
     try {
-        const { name, email, password, role, monthlySalary, department, designation } = req.body;
+        const {
+            name, email, password, role,
+            monthlySalary, department, designation,
+            phone,
+            reportingTo,   // ← NEW: TL's _id to assign this employee to a team
+        } = req.body;
 
         if (!name || !email || !password) {
             return res.status(400).json({
                 success: false,
                 message: "name, email and password are required",
             });
+        }
+
+        if (phone) {
+            const cleanPhone = phone.toString().replace(/\D/g, "");
+            if (cleanPhone.length !== 12 || !cleanPhone.startsWith("91")) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Please add a valid mobile number with country code (e.g. 919876543210)",
+                });
+            }
         }
 
         const existingUser = await User.findOne({ email });
@@ -64,6 +79,7 @@ const createUserByHR = async (req, res) => {
         const user = await User.create({
             name,
             email,
+            phone: phone || "",
             password: hashedPassword,
             employeeId,
             role: role || "employee",
@@ -73,6 +89,16 @@ const createUserByHR = async (req, res) => {
                 monthly: monthlySalary || 0,
                 perDay: 0,
             },
+            // ── Save reportingTo only if provided and valid ──
+            ...(reportingTo ? { reportingTo } : {}),
+        });
+
+        await notifyWelcome(email, {
+            employeeName: name,
+            employeeId: user.employeeId,
+            designation: designation || "",
+            department: department || "",
+            password: password,
         });
 
         res.status(201).json({
@@ -96,7 +122,7 @@ const getAllUsers = async (req, res) => {
         if (req.user.role === "hr") {
             filter.role = { $in: ["employee", "tl"] };
         } else if (req.user.role === "manager") {
-            filter.role = { $in: ["employee", "tl"] };
+            filter.role = { $in: ["employee", "tl", "hr"] };
         } else if (req.user.role === "tl") {
             filter.reportingTo = req.user._id;
         }
@@ -105,7 +131,7 @@ const getAllUsers = async (req, res) => {
 
         const safeUsers = users.map(user => {
             const u = user.toObject();
-            if (req.user.role !== "hr" && req.user.role !== "superadmin") {
+            if (req.user.role !== "hr" && req.user.role !== "manager") {
                 delete u.salary;
             }
             return u;
@@ -117,6 +143,55 @@ const getAllUsers = async (req, res) => {
             users: safeUsers,
         });
 
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+// ─────────────────────────────────────────────
+//  GET ALL TLs  (HR uses this to populate dropdown)
+// ─────────────────────────────────────────────
+const getAllTLs = async (req, res) => {
+    try {
+        const tls = await User.find({ role: "tl", status: "active" }).select("_id name employeeId department");
+        res.status(200).json({ success: true, tls });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+// ─────────────────────────────────────────────
+//  ASSIGN TEAM MEMBERS TO TL  (HR bulk-assign)
+//  PATCH /users/assign-team
+//  body: { tlId: "...", employeeIds: ["...", "..."] }
+// ─────────────────────────────────────────────
+const assignTeamToTL = async (req, res) => {
+    try {
+        const { tlId, employeeIds } = req.body;
+
+        if (!tlId || !Array.isArray(employeeIds) || employeeIds.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: "tlId and a non-empty employeeIds array are required",
+            });
+        }
+
+        const tl = await User.findById(tlId);
+        if (!tl || tl.role !== "tl") {
+            return res.status(400).json({ success: false, message: "Invalid TL id" });
+        }
+
+        await User.updateMany(
+            { _id: { $in: employeeIds } },
+            { $set: { reportingTo: tlId } }
+        );
+
+        res.status(200).json({
+            success: true,
+            message: `${employeeIds.length} employee(s) assigned to ${tl.name}`,
+        });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -136,7 +211,7 @@ const getSingleUser = async (req, res) => {
 
         let userData = user.toObject();
 
-        if (req.user.role !== "hr" && req.user.role !== "superadmin") {
+        if (req.user.role !== "hr" && req.user.role !== "manager") {
             delete userData.salary;
         }
 
@@ -213,8 +288,8 @@ const updateUserStatus = async (req, res) => {
             return res.status(400).json({ success: false, message: "You cannot change your own status" });
         }
 
-        if (status === "terminated" && req.user.role !== "hr" && req.user.role !== "superadmin") {
-            return res.status(403).json({ success: false, message: "Only HR can terminate users" });
+        if (status === "terminated" && req.user.role !== "hr" && req.user.role !== "manager") {
+            return res.status(403).json({ success: false, message: "Only HR & Manager can terminate users" });
         }
 
         if (target.role === "superadmin" && req.user.role !== "superadmin") {
@@ -241,7 +316,7 @@ const updateUserStatus = async (req, res) => {
 // ─────────────────────────────────────────────
 const updateMyProfile = async (req, res) => {
     try {
-        const ALLOWED_FIELDS = ["phone", "dob", "avatar", "maritalStatus", "nationality"];
+        const ALLOWED_FIELDS = ["phone", "dob", "avatar", "maritalStatus", "nationality", "guardianName"];
         const updates = {};
 
         ALLOWED_FIELDS.forEach(field => {
@@ -340,10 +415,13 @@ const getGovernmentId = async (req, res) => {
             return res.status(403).json({ success: false, message: "Access denied" });
         }
 
-        const user = await User.findById(targetId).select("+governmentId");
+        const user = await User.findById(targetId).select("+governmentIds");
         if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-        res.status(200).json({ success: true, governmentId: user.governmentId });
+        res.status(200).json({
+            success: true,
+            governmentIds: user.governmentIds
+        });
 
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -357,10 +435,10 @@ const getGovernmentId = async (req, res) => {
 const updateGovernmentId = async (req, res) => {
     try {
         const targetId = req.params.id || req.user._id;
-        const { idType, idNumber } = req.body;
+        const { governmentIds } = req.body;
 
-        if (!idType || !idNumber) {
-            return res.status(400).json({ success: false, message: "idType and idNumber are required" });
+        if (!governmentIds) {
+            return res.status(400).json({ success: false, message: "governmentIds is required" });
         }
 
         if (
@@ -370,29 +448,35 @@ const updateGovernmentId = async (req, res) => {
             return res.status(403).json({ success: false, message: "Access denied" });
         }
 
-        // ── Format + checksum validation ────────────────────────────
-        const validation = validateGovernmentId(idType, idNumber);
-        if (!validation.valid) {
-            return res.status(400).json({
-                success: false,
-                message: validation.message,
-            });
+        if (
+            governmentIds.pan &&
+            !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(governmentIds.pan)
+        ) {
+            return res.status(400).json({ success: false, message: "Invalid PAN format" });
         }
 
-        const normalised = idNumber.trim().toUpperCase().replace(/\s/g, "");
+        if (
+            governmentIds.aadhaar &&
+            !/^\d{12}$/.test(governmentIds.aadhaar)
+        ) {
+            return res.status(400).json({ success: false, message: "Invalid Aadhaar format" });
+        }
+
+        const normalizedPan = governmentIds.pan ? governmentIds.pan.trim().toUpperCase() : "";
+        const normalizedAadhaar = governmentIds.aadhaar ? governmentIds.aadhaar.trim() : "";
 
         const user = await User.findByIdAndUpdate(
             targetId,
-            { governmentId: { idType, idNumber: normalised } },
+            { governmentIds: { pan: normalizedPan, aadhaar: normalizedAadhaar } },
             { new: true, runValidators: true }
-        ).select("+governmentId");
+        ).select("+governmentIds");
 
         if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
         res.status(200).json({
             success: true,
-            message: "Government ID validated and saved",
-            governmentId: user.governmentId,
+            message: "Government IDs saved successfully",
+            governmentIds: user.governmentIds,
         });
 
     } catch (error) {
@@ -433,6 +517,17 @@ const updateBankDetails = async (req, res) => {
     try {
         const targetId = req.params.id || req.user._id;
         const { accountHolderName, accountNumber, bankName, ifscCode, branchName, accountType } = req.body;
+        const user2 = await User.findById(targetId);
+
+        const normalize = (str) =>
+            str.toLowerCase().replace(/\s+/g, " ").trim();
+
+        if (normalize(user2.name) !== normalize(accountHolderName)) {
+            return res.status(400).json({
+                success: false,
+                message: "Account holder name must match your profile name",
+            });
+        }
 
         if (!accountHolderName || !accountNumber || !ifscCode) {
             return res.status(400).json({
@@ -448,7 +543,6 @@ const updateBankDetails = async (req, res) => {
             return res.status(403).json({ success: false, message: "Access denied" });
         }
 
-        // ── Format + IFSC live lookup ───────────────────────────────
         const validation = await validateBankDetails({
             accountNumber,
             ifsc: ifscCode,
@@ -463,7 +557,6 @@ const updateBankDetails = async (req, res) => {
             });
         }
 
-        // Auto-fill bank + branch from IFSC lookup if not provided
         const resolvedBankName = bankName || validation.bankInfo?.bank || "";
         const resolvedBranchName = branchName || validation.bankInfo?.branch || "";
 
@@ -534,6 +627,8 @@ const debugUsers = async (req, res) => {
 module.exports = {
     createUserByHR,
     getAllUsers,
+    getAllTLs,
+    assignTeamToTL,
     getSingleUser,
     updateUser,
     deleteUser,

@@ -15,21 +15,6 @@ const TYPE_TO_EVENT = {
     payroll: "payrollGenerated",
 };
 
-/* ─────────────────────────────────────────────────────────────────────────
-   createNotification(io, userId, title, message, type, meta)
-   ──────────────────────────────────────────────────────────
-   Call this from any controller after an important action.
-
-   Example:
-     await createNotification(
-       req.io,
-       leave.user._id,
-       "Leave Approved ✅",
-       `Your ${leave.type} leave has been approved.`,
-       "leave_approved",
-       { leaveId: leave._id }
-     );
-───────────────────────────────────────────────────────────────────────── */
 const createNotification = async (
     io,
     userId,

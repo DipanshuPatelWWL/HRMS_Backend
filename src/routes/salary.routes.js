@@ -9,14 +9,14 @@ const { getMonthlySalary, updateSalaryAccess } = require("../controllers/salary.
 router.get(
     "/:userId/monthly",
     protect,
-    allowRoles("hr", "employee", "superadmin"),
+    allowRoles("hr", "employee", "manager"),
     getMonthlySalary
 );
 
 router.put(
     "/salary-access/:id",
     protect,
-    allowRoles("hr", "superadmin"),
+    allowRoles("hr", "manager", "manager"),
     updateSalaryAccess
 );
 

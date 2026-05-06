@@ -5,49 +5,80 @@ const protect = require("../middleware/auth.middleware");
 const allowRoles = require("../middleware/role.middleware");
 
 const {
-    processPayroll,
-    getMyPayrolls,
+    generatePayroll,
     getAllPayrolls,
-    updatePayroll,
     markAsPaid,
+    bulkMarkPaid,
+    deletePayroll,
+    getMyPayrolls,
+    getPayroll,
+    getPayrollStats,
 } = require("../controllers/payroll.controller");
 
-
-
-router.post(
-    "/process",
-    protect,
-    allowRoles("hr", "superadmin"),
-    processPayroll
-);
-
+// ── Employee ─────────────────────────────────────────────
+// Employee views own paid payslips
 router.get(
     "/my",
     protect,
-    allowRoles("employee", "tl", "manager", "hr"),
+    allowRoles("employee", "tl", "manager", "hr", "superadmin"),
     getMyPayrolls
 );
 
-
+// ── HR / SuperAdmin ───────────────────────────────────────
+// Summary stats for dashboard
 router.get(
-    "/",
+    "/stats",
     protect,
-    allowRoles("hr", "superadmin"),
+    allowRoles("hr", "manager", "superadmin"),
+    getPayrollStats
+);
+
+// List all payrolls (with optional month/year/status filter)
+router.get(
+    "/all",
+    protect,
+    allowRoles("hr", "manager", "superadmin"),
     getAllPayrolls
 );
 
-router.put(
-    "/:id",
+// Generate payroll for one or all employees
+router.post(
+    "/generate",
     protect,
-    allowRoles("hr", "superadmin"),
-    updatePayroll
+    allowRoles("hr", "manager", "superadmin"),
+    generatePayroll
 );
 
+// Mark single payroll as paid
 router.put(
-    "/pay/:id",
+    "/:id/mark-paid",
     protect,
-    allowRoles("hr", "superadmin"),
+    allowRoles("hr", "manager", "superadmin"),
     markAsPaid
+);
+
+// Bulk mark as paid
+router.put(
+    "/bulk-mark-paid",
+    protect,
+    allowRoles("hr", "manager", "superadmin"),
+    bulkMarkPaid
+);
+
+// Delete draft payroll
+router.delete(
+    "/:id",
+    protect,
+    allowRoles("hr", "manager", "superadmin"),
+    deletePayroll
+);
+
+// Get single payroll (HR or owner)
+router.get(
+    "/:id",
+    protect,
+    allowRoles("employee", "tl", "manager", "hr", "superadmin"),
+    getPayroll
 );
 
 module.exports = router;

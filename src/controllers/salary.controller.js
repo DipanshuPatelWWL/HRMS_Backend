@@ -37,7 +37,7 @@ const getMonthlySalary = async (req, res) => {
         }
 
         // ── ACCESS CONTROL ────────────────────────
-        if (req.user.role !== "hr" && req.user.role !== "superadmin") {
+        if (req.user.role !== "hr" && req.user.role !== "manager") {
             if (req.user._id.toString() !== userId) {
                 return res.status(403).json({
                     success: false,

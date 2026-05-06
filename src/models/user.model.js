@@ -46,8 +46,14 @@ const userSchema = new mongoose.Schema(
         phone: {
             type: String,
             default: "",
-            trim: true,
-            match: [/^[0-9]{10}$/, "Enter valid phone number"],
+            validate: {
+                validator: function (v) {
+                    if (!v || v === "") return true; // phone is optional
+                    // accept 10-digit OR 12-digit with country code
+                    return /^[0-9]{10}$/.test(v) || /^91[0-9]{10}$/.test(v);
+                },
+                message: "Enter valid phone number"
+            }
         },
 
         designation: {
@@ -87,6 +93,12 @@ const userSchema = new mongoose.Schema(
 
         dob: { type: Date, default: null },
 
+        guardianName: {
+            type: String,
+            default: "",
+            trim: true,
+        },
+
         // ─── Personal Details ─────────────────────────────────────────
         maritalStatus: {
             type: String,
@@ -100,17 +112,28 @@ const userSchema = new mongoose.Schema(
             trim: true,
         },
 
-        governmentId: {
-            idType: {
+        governmentIds: {
+            pan: {
                 type: String,
-                enum: ["aadhaar", "pan", "passport", "voter_id", "driving_license", "other"],
-                default: null,
+                default: "",
+                trim: true,
+                uppercase: true,
             },
-            idNumber: {
+            aadhaar: {
                 type: String,
                 default: "",
                 trim: true,
             },
+            passport: {
+                type: String,
+                default: "",
+                trim: true,
+            },
+            drivingLicense: {
+                type: String,
+                default: "",
+                trim: true,
+            }
         },
 
         bankDetails: {
@@ -185,7 +208,7 @@ userSchema.methods.toJSON = function () {
         delete obj.salary;
     }
 
-    if (!["hr", "superadmin"].includes(this.role)) {
+    if (!["hr", "manager"].includes(this.role)) {
         delete obj.governmentId;
         delete obj.bankDetails;
     }

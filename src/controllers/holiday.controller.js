@@ -1,5 +1,7 @@
 // controllers/holiday.controller.js
 const Holiday = require("../models/holiday.model");
+const { notifyHoliday } = require("../services/emailNotify");
+const User = require("../models/user.model")
 
 // 📌 Utility: normalize date to start of day
 const normalizeDate = (date) => {
@@ -66,6 +68,17 @@ const markHoliday = async (req, res) => {
             type: type || "company",
             markedBy: req.user._id,
         });
+
+        const allUsers = await User.find({ status: "active" }).select("email");
+        await Promise.allSettled(
+            allUsers.map(u =>
+                notifyHoliday(u.email, {
+                    name,
+                    date: normalized,
+                    markedBy: req.user.name
+                })
+            )
+        );
 
         res.status(201).json({
             success: true,

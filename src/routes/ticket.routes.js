@@ -79,7 +79,7 @@ router.put(
 router.delete(
     "/:id",
     protect,
-    allowRoles("hr", "superadmin"),
+    allowRoles("hr", "manager", "superadmin"),
     deleteTicket
 );
 

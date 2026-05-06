@@ -13,7 +13,18 @@ const {
     cancelLeave,
     revokeLeave,
     deleteLeave,
+    getLeaveBalance,
+    getEmployeesLeaveBalances,
+    updateEmployeeLeaveBalance,
 } = require("../controllers/leave.controller");
+
+// Employee views own leave balance
+router.get(
+    "/balance",
+    protect,
+    allowRoles("employee", "tl", "manager", "hr", "superadmin"),
+    getLeaveBalance
+);
 
 // Employee applies leave
 router.post(
@@ -35,7 +46,7 @@ router.get(
 router.get(
     "/all",
     protect,
-    allowRoles("hr", "manager", "superadmin"),
+    allowRoles("hr", "manager", "superadmin", "tl"),
     getAllLeaves
 );
 
@@ -59,11 +70,11 @@ router.put(
 router.put(
     "/hr-approve/:id",
     protect,
-    allowRoles("hr", "superadmin"),
+    allowRoles("hr", "manager", "superadmin"),
     approveByHR
 );
 
-// ✅ FIX: Employee included so they can cancel their own pending leave
+// Employee can cancel their own pending leave
 router.put(
     "/cancel/:id",
     protect,
@@ -71,11 +82,11 @@ router.put(
     cancelLeave
 );
 
-// ✅ NEW: HR can revoke an approved leave (restores balance)
+// HR can revoke an approved leave (restores balance)
 router.put(
     "/revoke/:id",
     protect,
-    allowRoles("hr", "superadmin"),
+    allowRoles("hr", "manager", "superadmin"),
     revokeLeave
 );
 
@@ -83,8 +94,25 @@ router.put(
 router.delete(
     "/:id",
     protect,
-    allowRoles("hr", "superadmin"),
+    allowRoles("hr", "manager", "superadmin"),
     deleteLeave
+);
+
+
+// HR views all employees leave balances
+router.get(
+    "/balances/all",
+    protect,
+    allowRoles("hr", "manager"),
+    getEmployeesLeaveBalances
+);
+
+// HR updates a specific employee's leave balance total
+router.put(
+    "/balance/:userId",
+    protect,
+    allowRoles("hr", "manager"),
+    updateEmployeeLeaveBalance
 );
 
 module.exports = router;

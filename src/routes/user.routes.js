@@ -20,6 +20,8 @@ const {
     updateGovernmentId,
     getBankDetails,
     updateBankDetails,
+    getAllTLs,
+    assignTeamToTL,
 } = require("../controllers/user.controller");
 
 
@@ -37,14 +39,72 @@ router.get("/me/bank-details", protect, getBankDetails);
 router.put("/me/bank-details", protect, updateBankDetails);
 
 
+// ─── Static named routes (must be before /:id) ───────────────────────────────
+router.get("/tls", protect, allowRoles("hr", "manager", "superadmin"), getAllTLs);
+router.patch("/assign-team", protect, allowRoles("hr", "manager", "superadmin"), assignTeamToTL);
+
+
 // ─── Admin / HR ───────────────────────────────────────────────────────────────
 router.post(
     "/create",
     protect,
-    allowRoles("hr", "superadmin"),
+    allowRoles("hr", "manager", "superadmin"),
     createUserByHR
 );
 
+router.put(
+    "/update/:id",
+    protect,
+    allowRoles("hr", "manager", "superadmin"),
+    updateUser
+);
+
+router.delete(
+    "/delete/:id",
+    protect,
+    allowRoles("hr", "manager", "superadmin"),
+    deleteUser
+);
+
+router.put(
+    "/update-status/:id",
+    protect,
+    allowRoles("hr", "manager", "superadmin"),
+    updateUserStatus
+);
+
+
+// ─── Sensitive fields (HR / superadmin only) ──────────────────────────────────
+router.get(
+    "/:id/government-id",
+    protect,
+    allowRoles("hr", "manager", "superadmin"),
+    getGovernmentId
+);
+
+router.put(
+    "/:id/government-id",
+    protect,
+    allowRoles("hr", "manager", "superadmin"),
+    updateGovernmentId
+);
+
+router.get(
+    "/:id/bank-details",
+    protect,
+    allowRoles("hr", "manager", "superadmin"),
+    getBankDetails
+);
+
+router.put(
+    "/:id/bank-details",
+    protect,
+    allowRoles("hr", "manager", "superadmin"),
+    updateBankDetails
+);
+
+
+// ─── General user routes ──────────────────────────────────────────────────────
 router.get(
     "/",
     protect,
@@ -58,57 +118,5 @@ router.get(
     allowRoles("hr", "manager", "tl", "superadmin"),
     getSingleUser
 );
-
-router.put(
-    "/update/:id",
-    protect,
-    allowRoles("hr", "superadmin"),
-    updateUser
-);
-
-router.delete(
-    "/delete/:id",
-    protect,
-    allowRoles("hr", "superadmin"),
-    deleteUser
-);
-
-router.put(
-    "/update-status/:id",
-    protect,
-    allowRoles("hr", "superadmin"),
-    updateUserStatus
-);
-
-
-// ─── Sensitive fields (HR / superadmin only) ──────────────────────────────────
-router.get(
-    "/:id/government-id",
-    protect,
-    allowRoles("hr", "superadmin"),
-    getGovernmentId
-);
-
-router.put(
-    "/:id/government-id",
-    protect,
-    allowRoles("hr", "superadmin"),
-    updateGovernmentId
-);
-
-router.get(
-    "/:id/bank-details",
-    protect,
-    allowRoles("hr", "superadmin"),
-    getBankDetails
-);
-
-router.put(
-    "/:id/bank-details",
-    protect,
-    allowRoles("hr", "superadmin"),
-    updateBankDetails
-);
-
 
 module.exports = router;

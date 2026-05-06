@@ -35,9 +35,6 @@ const Ticket = require("../models/ticket.model");
 
 
 const createTicket = async (req, res) => {
-    console.log("═══ createTicket HIT ═══");
-    console.log("body:", req.body);
-    console.log("user:", req.user);
     try {
         const { title, description, category, priority } = req.body;
 
@@ -47,8 +44,6 @@ const createTicket = async (req, res) => {
                 message: "title and description are required",
             });
         }
-
-        console.log("Creating ticket...");
         const ticket = await Ticket.create({
             user: req.user._id,
             title,
@@ -57,11 +52,10 @@ const createTicket = async (req, res) => {
             priority: priority || "medium",
         });
 
-        console.log("Ticket created:", ticket._id);
+
         const populated = await Ticket.findById(ticket._id)
             .populate("user", "name email employeeId");
 
-        console.log("Populated:", populated);
         res.status(201).json({
             success: true,
             message: "Ticket raised successfully",

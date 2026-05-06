@@ -1,6 +1,7 @@
 const Announcement = require("../models/announcement.model");
 const User = require("../models/user.model");
 const { createNotification } = require("./notification.controller");
+const { notifyAnnouncement } = require("../services/emailNotify");
 
 // ─── CREATE (HR / Manager) ───────────────────────────────────────────────────
 const createAnnouncement = async (req, res) => {
@@ -45,10 +46,15 @@ const createAnnouncement = async (req, res) => {
         const meta = { announcementId: announcement._id };
 
         if (targetUsers && targetUsers.length > 0) {
+            const users = await User.find({ _id: { $in: targetUsers } }).select("_id email").lean();
             // Notify only the selected users
             await Promise.allSettled(
-                targetUsers.map(userId =>
-                    createNotification(io, userId, notifTitle, notifMessage, "announcement", meta)
+                users.map(u =>
+                    notifyAnnouncement(u.email, {
+                        title,
+                        body,
+                        postedBy: req.user.name
+                    })
                 )
             );
         } else {

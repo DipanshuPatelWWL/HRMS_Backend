@@ -1,3 +1,4 @@
+require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const http = require("http");
@@ -18,6 +19,12 @@ const ticketRoutes = require("./routes/ticket.routes");
 const announcementRoutes = require("./routes/announcement.routes");
 const holidayRoutes = require("./routes/holiday.routes");
 const salaryRoutes = require("./routes/salary.routes");
+const correctionRoutes = require("./routes/attendanceCorrection.routes");
+const PublicRoutes = require("./routes/publicRoutes");
+const SalesReportRoutes = require("./routes/sales.report.routes");
+const celebrationRoutes = require("./routes/celebration.routes");
+const celebrationTemplateRoutes = require("./routes/celebrationTemplate.routes");
+
 
 const app = express();
 const server = http.createServer(app);
@@ -27,17 +34,23 @@ app.use(cors({
     origin: "*",
     credentials: true,
 }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+
+app.use(express.json({ limit: "20mb" }));
+app.use(express.urlencoded({ limit: "20mb", extended: true }));
 app.use("/uploads", express.static("uploads"));
 
 // ⚡ SOCKET.IO SETUP
 const io = new Server(server, {
     cors: {
-        origin: "*",
-        methods: ["GET", "POST"],
+        origin: [
+            "http://localhost:5173",
+            "http://localhost:5174",
+        ],
+        methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+        credentials: true,
     },
-});
+    transports: ["websocket", "polling"],
+})
 
 // 🔐 SOCKET AUTH
 io.use((socket, next) => {
@@ -91,6 +104,11 @@ app.use("/api/tasks", taskRoutes);
 app.use("/api/announcements", announcementRoutes);
 app.use("/api/holidays", holidayRoutes);
 app.use("/api/salary", salaryRoutes);
+app.use("/api/attendance-corrections", correctionRoutes);
+app.use("/api", PublicRoutes);
+app.use("/api", SalesReportRoutes);
+app.use("/api/celebrations", celebrationRoutes);
+app.use("/api/celebrationTemplate", celebrationTemplateRoutes);
 
 // ✅ EXPORT (IMPORTANT)
 module.exports = { app, server };

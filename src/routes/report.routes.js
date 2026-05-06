@@ -14,11 +14,11 @@ const {
 } = require("../controllers/report.controller");
 
 
-router.get("/attendance", protect, allowRoles("hr", "superadmin"), getAttendanceReport);
-router.get("/leave", protect, allowRoles("hr", "superadmin"), getLeaveReport);
-router.get("/payroll", protect, allowRoles("hr", "superadmin"), getPayrollReport);
-router.get("/employees", protect, allowRoles("hr", "superadmin"), getEmployeeStats);
+router.get("/attendance", protect, allowRoles("hr", "manager", "superadmin"), getAttendanceReport);
+router.get("/leave", protect, allowRoles("hr", "superadmin", "tl"), getLeaveReport);
+router.get("/payroll", protect, allowRoles("hr", "manager", "superadmin"), getPayrollReport);
+router.get("/employees", protect, allowRoles("hr", "manager", "superadmin"), getEmployeeStats);
 router.get("/dashboard", protect, getMyDashboardStats);
-router.get("/hr-dashboard", protect, allowRoles("hr", "superadmin"), getHRDashboardStats);
+router.get("/hr-dashboard", protect, allowRoles("hr", "manager", "superadmin"), getHRDashboardStats);
 
 module.exports = router;
