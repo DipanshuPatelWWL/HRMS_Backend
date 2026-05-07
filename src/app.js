@@ -45,7 +45,7 @@ const io = new Server(server, {
         origin: [
             // "http://localhost:5173",
             // "http://localhost:5174",
-            "https://wwl-hrms.vercel.app"
+            "https://wwl-hrms.vercel.app/"
         ],
         methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
         credentials: true,
