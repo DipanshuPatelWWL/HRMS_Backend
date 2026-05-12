@@ -3,7 +3,7 @@ const router = express.Router();
 
 const protect = require("../middleware/auth.middleware");
 const allowRoles = require("../middleware/role.middleware");
-const upload = require("../middleware/upload.middleware");
+const { uploadAvatar: uploadAvatarMiddleware } = require("../middleware/upload.middleware");
 
 const {
     createUserByHR,
@@ -31,7 +31,7 @@ router.get("/debug", debugUsers);
 
 
 // ─── Me routes (must be before /:id to avoid "me" being treated as an id) ────
-router.post("/me/avatar", protect, upload.single("avatar"), uploadAvatar);
+router.post("/me/avatar", protect, uploadAvatarMiddleware.single("avatar"), uploadAvatar);
 router.put("/me/profile", protect, updateMyProfile);
 router.put("/me/password", protect, changeMyPassword);
 router.get("/me/government-id", protect, getGovernmentId);
