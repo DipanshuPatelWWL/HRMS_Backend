@@ -6,6 +6,7 @@ const {
     startCelebrationCron
 } = require("./src/cron/celebration.cron");
 const { startLeaveAccrualCron } = require("./src/cron/leave.cron")
+// const { startPersonalIntentSeed } = require("./src/cron/seedCompanyKB")
 
 const PORT = process.env.PORT || 5000;
 
@@ -18,6 +19,7 @@ const startServer = async () => {
             console.log(`🚀 Server running on port ${PORT}`);
             startLeaveAccrualCron();
             startCelebrationCron();
+            // startPersonalIntentSeed();
         });
     } catch (error) {
         console.error("❌ Server Error:", error.message);

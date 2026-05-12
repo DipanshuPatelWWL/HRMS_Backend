@@ -84,11 +84,15 @@ const createAnnouncement = async (req, res) => {
     }
 };
 
-// ─── GET ALL (filtered by role) ──────────────────────────────────────────────
+
+// ─── GET ALL (filtered by role + joining date) ──────────────────────────────
 const getAnnouncements = async (req, res) => {
     try {
         const userRole = req.user.role;
         const userId = req.user._id;
+
+        // Get full user data
+        const user = await User.findById(userId).select("joiningDate role");
 
         const filter = {
             $and: [
@@ -108,6 +112,19 @@ const getAnnouncements = async (req, res) => {
             ],
         };
 
+        // ✅ Employees should only see announcements
+        // created AFTER their joining date
+        if (
+            user?.joiningDate &&
+            user.role === "employee"
+        ) {
+            filter.$and.push({
+                createdAt: {
+                    $gte: new Date(user.joiningDate),
+                },
+            });
+        }
+
         const announcements = await Announcement.find(filter)
             .populate("createdBy", "name role")
             .sort({ pinned: -1, createdAt: -1 });
@@ -125,7 +142,10 @@ const getAnnouncements = async (req, res) => {
             announcements: withRead,
         });
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        res.status(500).json({
+            success: false,
+            message: error.message,
+        });
     }
 };
 

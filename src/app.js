@@ -24,6 +24,8 @@ const PublicRoutes = require("./routes/publicRoutes");
 const SalesReportRoutes = require("./routes/sales.report.routes");
 const celebrationRoutes = require("./routes/celebration.routes");
 const celebrationTemplateRoutes = require("./routes/celebrationTemplate.routes");
+const AIRoutes = require("./routes/ai.routes");
+const HRAIRoutes = require("./routes/hr.ai.routes");
 
 
 const app = express();
@@ -110,6 +112,8 @@ app.use("/api", PublicRoutes);
 app.use("/api", SalesReportRoutes);
 app.use("/api/celebrations", celebrationRoutes);
 app.use("/api/celebrationTemplate", celebrationTemplateRoutes);
+app.use("/api/ai", AIRoutes);
+app.use("/api/hr-ai", HRAIRoutes);
 
 // ✅ EXPORT (IMPORTANT)
 module.exports = { app, server };

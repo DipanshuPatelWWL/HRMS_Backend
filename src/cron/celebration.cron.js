@@ -18,10 +18,6 @@ const processCelebrations = async () => {
     try {
 
         const now = new Date();
-
-        console.log("⏰ Checking celebrations...");
-        console.log("Current Time:", now);
-
         const celebrations = await Celebration.find({
             status: "pending",
             scheduledAt: { $lte: now },
@@ -30,13 +26,9 @@ const processCelebrations = async () => {
             .populate("templateId")
             .populate("recipients");
 
-        console.log("Found celebrations:", celebrations.length);
-
         for (const celebration of celebrations) {
 
             try {
-
-                console.log("Processing:", celebration._id);
 
                 const employee = celebration.employeeId;
                 const template = celebration.templateId;
@@ -47,8 +39,6 @@ const processCelebrations = async () => {
 
                 if (!employee) {
 
-                    console.log("❌ Employee missing");
-
                     celebration.status = "failed";
 
                     await celebration.save();
@@ -57,8 +47,6 @@ const processCelebrations = async () => {
                 }
 
                 if (!template) {
-
-                    console.log("❌ Template missing");
 
                     celebration.status = "failed";
 
@@ -97,18 +85,12 @@ const processCelebrations = async () => {
 
                 if (celebration.sendToEmployee) {
 
-                    console.log(
-                        "📧 Sending to employee:",
-                        employee.email
-                    );
-
                     await sendCelebrationMail({
                         to: employee.email,
                         subject,
                         html,
                     });
 
-                    console.log("✅ Sent to employee");
                 }
 
                 // ─────────────────────────
@@ -125,11 +107,6 @@ const processCelebrations = async () => {
 
                         if (!recipient?.email) continue;
 
-                        console.log(
-                            "📧 Sending to:",
-                            recipient.email
-                        );
-
                         await sendCelebrationMail({
                             to: recipient.email,
                             subject: `🎉 Wish ${employee.name} a happy ${celebration.eventType}`,
@@ -138,7 +115,6 @@ const processCelebrations = async () => {
 
                     }
 
-                    console.log("✅ Sent to recipients");
                 }
 
                 // ─────────────────────────
@@ -148,8 +124,6 @@ const processCelebrations = async () => {
                 celebration.status = "sent";
 
                 await celebration.save();
-
-                console.log("✅ Celebration marked as sent");
 
             } catch (err) {
 
