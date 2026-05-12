@@ -22,6 +22,7 @@ const {
     updateBankDetails,
     getAllTLs,
     assignTeamToTL,
+    getSalesUsers,
 } = require("../controllers/user.controller");
 
 
@@ -101,6 +102,14 @@ router.put(
     protect,
     allowRoles("hr", "manager", "superadmin"),
     updateBankDetails
+);
+
+
+router.get(
+    "/sales-users",
+    protect,
+    allowRoles("manager"),
+    getSalesUsers
 );
 
 

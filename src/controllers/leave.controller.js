@@ -62,7 +62,7 @@ const finalizeApproval = async (leave) => {
     leave.paidDays = paidDays;
     leave.unpaidDays = unpaidDays;
 
-    user.leaveBalance.total -= paidDays;
+    // user.leaveBalance.total -= paidDays;
     user.leaveBalance.used += paidDays;
     await user.save();
 };
@@ -644,7 +644,7 @@ const revokeLeave = async (req, res) => {
         if (leave.paidDays > 0) {
             await User.findByIdAndUpdate(leave.user, {
                 $inc: {
-                    "leaveBalance.total": leave.paidDays,
+                    // "leaveBalance.total": leave.paidDays,
                     "leaveBalance.used": -leave.paidDays,
                 },
             });
@@ -691,7 +691,7 @@ const deleteLeave = async (req, res) => {
         if (leave.status === "approved" && leave.paidDays > 0) {
             await User.findByIdAndUpdate(leave.user, {
                 $inc: {
-                    "leaveBalance.total": leave.paidDays,
+                    // "leaveBalance.total": leave.paidDays,
                     "leaveBalance.used": -leave.paidDays,
                 },
             });

@@ -624,6 +624,30 @@ const debugUsers = async (req, res) => {
 };
 
 
+const getSalesUsers = async (req, res) => {
+    try {
+
+        const users = await User.find({
+            department: "Sales",
+            designation: {
+                $in: ["Business Development Manager"]
+            }
+        }).select("name email designation role");
+
+        res.status(200).json({
+            success: true,
+            users,
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message,
+        });
+    }
+};
+
+
 module.exports = {
     createUserByHR,
     getAllUsers,
@@ -641,4 +665,5 @@ module.exports = {
     updateGovernmentId,
     getBankDetails,
     updateBankDetails,
+    getSalesUsers
 };
