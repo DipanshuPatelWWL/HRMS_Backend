@@ -150,6 +150,7 @@ const salesLeadSchema = new mongoose.Schema(
             enum: [
                 "website",
                 "facebook",
+                "google",
                 "linkedin",
                 "instagram",
                 "whatsapp",
