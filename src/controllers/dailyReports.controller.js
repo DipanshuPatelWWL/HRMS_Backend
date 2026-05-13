@@ -23,7 +23,8 @@ const createDailyReport = async (req, res) => {
             day,
             status: status || "pending",
             message: message || "",
-            file: req.file ? req.file.path : "",  // multer sets req.file
+            file: req.file ? req.file.path : "",
+            user: req.user._id,
         };
 
         const report = await DailyReport.create(reportData);
@@ -50,19 +51,18 @@ const createDailyReport = async (req, res) => {
 // ─────────────────────────────────────────────
 const getAllDailyReports = async (req, res) => {
     try {
-        // Optional filters via query params: ?status=pending&day=Monday
-        const filter = {};
+        // Strictly scope to the authenticated user — never expose other users' reports
+        const filter = { user: req.user._id };
+
         if (req.query.status) filter.status = req.query.status;
         if (req.query.day) filter.day = req.query.day;
         if (req.query.date) {
             const start = new Date(req.query.date);
             const end = new Date(req.query.date);
             end.setHours(23, 59, 59, 999);
-            filter.date = { $gte: start, $lte: end };
+            filter.createdAt = { $gte: start, $lte: end };
         }
 
-        // Manager only sees reports sent by employees
-        filter.sent = true;
         const reports = await DailyReport.find(filter).sort({ createdAt: -1 });
 
         return res.status(200).json({
@@ -96,6 +96,14 @@ const getDailyReportById = async (req, res) => {
             });
         }
 
+        // Prevent one employee from reading another's report by guessing an ID
+        if (report.user.toString() !== req.user._id.toString()) {
+            return res.status(403).json({
+                success: false,
+                message: "Not authorized to view this report.",
+            });
+        }
+
         return res.status(200).json({
             success: true,
             data: report,
@@ -120,10 +128,11 @@ const updateDailyReport = async (req, res) => {
         const report = await DailyReport.findById(req.params.id);
 
         if (!report) {
-            return res.status(404).json({
-                success: false,
-                message: "Report not found.",
-            });
+            return res.status(404).json({ success: false, message: "Report not found." });
+        }
+
+        if (report.user.toString() !== req.user._id.toString()) {
+            return res.status(403).json({ success: false, message: "Not authorized to edit this report." });
         }
 
         const { task_name, day, status, message } = req.body;
@@ -219,6 +228,10 @@ const sendDailyReport = async (req, res) => {
             });
         }
 
+        if (report.user.toString() !== req.user._id.toString()) {
+            return res.status(403).json({ success: false, message: "Not authorized to send this report." });
+        }
+
         if (report.sent) {
             return res.status(400).json({
                 success: false,
@@ -244,6 +257,40 @@ const sendDailyReport = async (req, res) => {
     }
 };
 
+
+
+const getEmployeeDailyReports = async (req, res) => {
+    try {
+        const User = require("../models/user.model");
+
+        // Get all users who are employees (company-wide, no team filter)
+        const employees = await User.find({ role: "employee" }).select("_id");
+
+        const employeeIds = employees.map((e) => e._id);
+
+        const filter = { user: { $in: employeeIds }, sent: true }; // ← only sent reports
+        if (req.query.status) filter.status = req.query.status;
+        if (req.query.day) filter.day = req.query.day;
+
+        const reports = await DailyReport.find(filter)
+            .populate("user", "name employeeId designation department avatar")
+            .sort({ createdAt: -1 });
+
+        return res.status(200).json({
+            success: true,
+            count: reports.length,
+            data: reports,
+        });
+    } catch (error) {
+        console.error("getEmployeeDailyReports error:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Internal server error.",
+            error: error.message,
+        });
+    }
+};
+
 module.exports = {
     createDailyReport,
     getAllDailyReports,
@@ -251,4 +298,5 @@ module.exports = {
     updateDailyReport,
     updateReportStatus,
     sendDailyReport,
+    getEmployeeDailyReports,
 };

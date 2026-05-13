@@ -3,6 +3,7 @@ const router = express.Router();
 
 const protect = require("../middleware/auth.middleware");
 const allowRoles = require("../middleware/role.middleware");
+const { uploadTicket } = require("../middleware/upload.middleware");
 
 const {
     createTicket,
@@ -28,6 +29,7 @@ router.get(
 router.post(
     "/",
     protect,
+    uploadTicket.array("attachments", 4),
     createTicket
 );
 

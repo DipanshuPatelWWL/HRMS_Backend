@@ -44,12 +44,20 @@ const createTicket = async (req, res) => {
                 message: "title and description are required",
             });
         }
+
+        const attachments = req.files?.map((f) => ({
+            url: `/uploads/tickets/${f.filename}`,
+            originalName: f.originalname,
+            mimetype: f.mimetype,
+        })) || [];
+
         const ticket = await Ticket.create({
             user: req.user._id,
             title,
             description,
             category: category || "other",
             priority: priority || "medium",
+            attachments
         });
 
 

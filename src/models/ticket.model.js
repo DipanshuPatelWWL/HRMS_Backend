@@ -69,6 +69,14 @@ const ticketSchema = new mongoose.Schema(
             default: null,
         },
 
+        attachments: [
+            {
+                url: { type: String },
+                originalName: { type: String },
+                mimetype: { type: String },
+            },
+        ],
+
         replies: [replySchema],
 
         resolvedAt: {

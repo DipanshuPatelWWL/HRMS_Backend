@@ -43,7 +43,7 @@ exports.createLead = async (req, res) => {
             timeline: [
                 {
                     action: "LEAD_CREATED",
-                    message: `Lead created by ${req.user.name}`,
+                    message: `Lead send by ${req.user.name}`,
                     by: req.user._id,
                 },
             ],

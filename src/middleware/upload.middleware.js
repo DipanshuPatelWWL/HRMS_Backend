@@ -46,5 +46,6 @@ const createUpload = (folder = "uploads/misc/") => {
 // ─────────────────────────────────────────────
 const uploadAvatar = createUpload("uploads/avatars/");
 const uploadDailyReport = createUpload("uploads/daily-reports/");
+const uploadTicket = createUpload("uploads/tickets/");
 
-module.exports = { uploadAvatar, uploadDailyReport };
+module.exports = { uploadAvatar, uploadDailyReport, uploadTicket };

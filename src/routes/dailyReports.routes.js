@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const { uploadDailyReport: upload } = require("../middleware/upload.middleware");
+const protect = require("../middleware/auth.middleware"); // ← import protect
 
 const {
     createDailyReport,
@@ -9,25 +10,23 @@ const {
     updateDailyReport,
     updateReportStatus,
     sendDailyReport,
+    getEmployeeDailyReports,
 } = require("../controllers/dailyReports.controller");
 
-// POST   /api/daily-report              → submit a report (with optional file)
-router.post("/createDailyReport", upload.single("file"), createDailyReport);
 
-// GET    /api/daily-report              → get all reports (?status, ?day, ?date)
-router.get("/getAllDailyReports", getAllDailyReports);
+router.post("/createDailyReport", protect, upload.single("file"), createDailyReport);
 
-// GET    /api/daily-report/:id          → get one report
-router.get("/getDailyReportById/:id", getDailyReportById);
+router.get("/getAllDailyReports", protect, getAllDailyReports);
 
-// PUT    /api/daily-report/:id          → update report (with optional new file)
-router.put("/updateDailyReport/:id", upload.single("file"), updateDailyReport);
+router.get("/getDailyReportById/:id", protect, getDailyReportById);
 
-// PATCH  /api/daily-report/:id/status   → change status only (admin use)
-router.patch("/updateReportStatus/:id/status", updateReportStatus);
+router.put("/updateDailyReport/:id", protect, upload.single("file"), updateDailyReport);
 
-// PATCH  /api/daily-report/:id/send     → mark report as sent (employee)
-router.patch("/sendDailyReport/:id/send", sendDailyReport);
+router.patch("/updateReportStatus/:id/status", protect, updateReportStatus);
+
+router.patch("/sendDailyReport/:id/send", protect, sendDailyReport);
+
+router.get("/getEmployeeDailyReports", protect, getEmployeeDailyReports);
 
 
 module.exports = router;
