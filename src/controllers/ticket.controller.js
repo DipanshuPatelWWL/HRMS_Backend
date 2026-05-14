@@ -113,6 +113,7 @@ const getAllTickets = async (req, res) => {
             .populate("user", "name email employeeId")
             .populate("assignedTo", "name email")
             .populate("replies.sentBy", "name role")
+            .populate("resolvedBy", "name email")
             .sort({ createdAt: -1 });
 
         res.status(200).json({
