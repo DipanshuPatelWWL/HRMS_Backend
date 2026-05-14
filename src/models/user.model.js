@@ -136,6 +136,44 @@ const userSchema = new mongoose.Schema(
             }
         },
 
+        documents: {
+            aadhaar: {
+                url: { type: String, default: "" },
+                originalName: { type: String, default: "" },
+                uploadedAt: { type: Date, default: null },
+                verified: { type: Boolean, default: false },
+                verifiedAt: { type: Date, default: null },
+                verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+            },
+            pan: {
+                url: { type: String, default: "" },
+                originalName: { type: String, default: "" },
+                uploadedAt: { type: Date, default: null },
+                verified: { type: Boolean, default: false },
+                verifiedAt: { type: Date, default: null },
+                verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+            },
+            passbook: {
+                url: { type: String, default: "" },
+                originalName: { type: String, default: "" },
+                uploadedAt: { type: Date, default: null },
+                verified: { type: Boolean, default: false },
+                verifiedAt: { type: Date, default: null },
+                verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+            },
+            others: [
+                {
+                    url: { type: String, default: "" },
+                    originalName: { type: String, default: "" },
+                    label: { type: String, default: "Other Document" },
+                    uploadedAt: { type: Date, default: null },
+                    verified: { type: Boolean, default: false },
+                    verifiedAt: { type: Date, default: null },
+                    verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+                },
+            ],
+        },
+
         bankDetails: {
             accountHolderName: { type: String, default: "", trim: true },
             accountNumber: { type: String, default: "", trim: true },

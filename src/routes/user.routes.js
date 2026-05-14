@@ -3,7 +3,10 @@ const router = express.Router();
 
 const protect = require("../middleware/auth.middleware");
 const allowRoles = require("../middleware/role.middleware");
-const { uploadAvatar: uploadAvatarMiddleware } = require("../middleware/upload.middleware");
+const {
+    uploadAvatar: uploadAvatarMiddleware,
+    uploadDocuments: uploadDocumentsMiddleware,
+} = require("../middleware/upload.middleware");
 
 const {
     createUserByHR,
@@ -23,6 +26,9 @@ const {
     getAllTLs,
     assignTeamToTL,
     getSalesUsers,
+    uploadEmployeeDocument,
+    getEmployeeDocuments,
+    verifyEmployeeDocument
 } = require("../controllers/user.controller");
 
 
@@ -38,6 +44,15 @@ router.get("/me/government-id", protect, getGovernmentId);
 router.put("/me/government-id", protect, updateGovernmentId);
 router.get("/me/bank-details", protect, getBankDetails);
 router.put("/me/bank-details", protect, updateBankDetails);
+
+router.get("/me/documents", protect, getEmployeeDocuments);
+router.post(
+    "/me/documents/:type",
+    protect,
+    uploadDocumentsMiddleware.single("document"),
+    uploadEmployeeDocument
+);
+
 
 
 // ─── Static named routes (must be before /:id) ───────────────────────────────
@@ -103,6 +118,37 @@ router.put(
     allowRoles("hr", "manager", "superadmin"),
     updateBankDetails
 );
+
+
+router.get(
+    "/:id/documents",
+    protect,
+    allowRoles("hr", "manager", "superadmin"),
+    getEmployeeDocuments
+);
+router.post(
+    "/:id/documents/:type",
+    protect,
+    allowRoles("hr", "manager", "superadmin"),
+    uploadDocumentsMiddleware.single("document"),
+    uploadEmployeeDocument
+);
+
+// verify a specific "other" doc by its _id
+router.put(
+    "/:id/documents/other/:otherId/verify",
+    protect,
+    allowRoles("hr", "manager", "superadmin"),
+    verifyEmployeeDocument
+);
+
+router.put(
+    "/:id/documents/:type/verify",
+    protect,
+    allowRoles("hr", "manager", "superadmin"),
+    verifyEmployeeDocument
+);
+
 
 
 router.get(

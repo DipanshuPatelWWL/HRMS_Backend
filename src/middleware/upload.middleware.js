@@ -48,5 +48,12 @@ const uploadAvatar = createUpload("uploads/avatars/");
 const uploadDailyReport = createUpload("uploads/daily-reports/");
 const uploadTicket = createUpload("uploads/tickets/");
 const uploadAssetsImage = createUpload("uploads/assets/");
+const uploadDocuments = createUpload("uploads/documents/");
 
-module.exports = { uploadAvatar, uploadDailyReport, uploadTicket, uploadAssetsImage };
+module.exports = {
+    uploadAvatar,
+    uploadDailyReport,
+    uploadTicket,
+    uploadAssetsImage,
+    uploadDocuments,
+};

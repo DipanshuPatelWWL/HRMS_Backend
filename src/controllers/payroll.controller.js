@@ -6,141 +6,38 @@ const Leave = require("../models/leave.model");
 const { createNotification } = require("./notification.controller");
 
 // ─────────────────────────────────────────────
-//  HELPERS  (mirrors salary.controller logic)
+//  HELPER
 // ─────────────────────────────────────────────
 const isWeekend = (date) => {
     const d = new Date(date).getDay();
     return d === 0 || d === 6;
 };
 
-// const buildSalaryData = async (userId, month, year) => {
-//     const user = await User.findById(userId);
-//     if (!user || !user.salary?.monthly) return null;
-
-//     const start = new Date(year, month - 1, 1);
-//     const end = new Date(year, month, 0, 23, 59, 59, 999);
-//     const totalCalendarDays = new Date(year, month, 0).getDate();
-
-//     const perDay = Number((user.salary.monthly / totalCalendarDays).toFixed(2));
-//     const halfDayPay = Number((perDay / 2).toFixed(2));
-
-//     // ── Holidays ──────────────────────────────────────────
-//     const holidays = await Holiday.find({ date: { $gte: start, $lte: end } });
-//     const holidaySet = new Set(
-//         holidays.map(h => {
-//             const d = new Date(h.date);
-//             d.setHours(0, 0, 0, 0);
-//             return d.getTime();
-//         })
-//     );
-//     const holidayCount = holidays.length;
-
-//     // ── Weekends ──────────────────────────────────────────
-//     let totalWeekends = 0;
-//     for (let d = 1; d <= totalCalendarDays; d++) {
-//         if (isWeekend(new Date(year, month - 1, d))) totalWeekends++;
-//     }
-
-//     // ── Working days (Mon–Fri minus holidays) ─────────────
-//     let workingDays = 0;
-//     for (let d = 1; d <= totalCalendarDays; d++) {
-//         const cur = new Date(year, month - 1, d);
-//         cur.setHours(0, 0, 0, 0);
-//         if (!isWeekend(cur) && !holidaySet.has(cur.getTime())) workingDays++;
-//     }
-
-//     // ── Approved leaves for this month ───────────────────
-//     const leaves = await Leave.find({
-//         user: userId,
-//         status: "approved",
-//         fromDate: { $lte: end },
-//         toDate: { $gte: start },
-//     });
-
-//     const leaveDaySet = new Set();
-//     leaves.forEach(l => {
-//         const from = new Date(l.fromDate);
-//         const to = new Date(l.toDate);
-//         for (let d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) {
-//             const day = new Date(d);
-//             day.setHours(0, 0, 0, 0);
-//             if (
-//                 day >= start &&
-//                 day <= end &&
-//                 !isWeekend(day) &&
-//                 !holidaySet.has(day.getTime())
-//             ) {
-//                 leaveDaySet.add(day.getTime());
-//             }
-//         }
-//     });
-
-//     let paidLeave = 0;
-//     let unpaidLeave = 0;
-//     leaves.forEach(l => {
-//         paidLeave += l.paidDays || 0;
-//         unpaidLeave += l.unpaidDays || 0;
-//     });
-
-//     // ── Attendance records ────────────────────────────────
-//     const records = await Attendance.find({
-//         user: userId,
-//         date: { $gte: start, $lte: end },
-//     });
-
-//     let present = 0;
-//     let halfDays = 0;
-//     let totalOvertime = 0;
-
-//     records.forEach(a => {
-//         const d = new Date(a.date);
-//         d.setHours(0, 0, 0, 0);
-//         if (isWeekend(d)) return;
-//         if (holidaySet.has(d.getTime())) return;
-//         if (leaveDaySet.has(d.getTime())) return;
-
-//         if (a.isHalfDay) {
-//             halfDays++;
-//         } else if (a.status === "present") {
-//             present++;
-//         }
-
-//         totalOvertime += a.overtime || 0;
-//     });
-
-//     const coveredDays = present + halfDays + leaveDaySet.size;
-//     const absent = Math.max(0, workingDays - coveredDays);
-
-//     const basicEarnings = Number(((present + paidLeave + holidayCount + totalWeekends) * perDay).toFixed(2));
-//     const halfDayEarnings = Number((halfDays * halfDayPay).toFixed(2));
-//     const overtimePay = 0;
-
-//     const deductions = Number(((unpaidLeave + absent) * perDay).toFixed(2));
-//     const netSalary = Number(Math.max(0, basicEarnings + halfDayEarnings + overtimePay - deductions).toFixed(2));
-
-//     return {
-//         monthlySalary: user.salary.monthly,
-//         perDaySalary: perDay,
-//         presentDays: present,
-//         halfDays,
-//         absentDays: absent,
-//         paidLeave,
-//         unpaidLeave,
-//         holidays: holidayCount,
-//         weekends: totalWeekends,
-//         totalWorkingDays: workingDays,
-//         totalCalendarDays,
-//         basicEarnings,
-//         halfDayEarnings,
-//         overtimePay,
-//         deductions,
-//         netSalary,
-//     };
-// };
-
-
 // ─────────────────────────────────────────────
-//  GENERATE PAYROLL  (HR)
+//  BUILD SALARY DATA
+//
+//  FORMULA:
+//    perDay      = monthlySalary / totalCalendarDays  (28 / 30 / 31)
+//    halfDayPay  = perDay / 2
+//
+//    deductions  = (absentDays  × perDay)
+//                + (halfDays    × halfDayPay)
+//                + (unpaidLeave × perDay)
+//
+//    netSalary   = monthlySalary - deductions
+//
+//  POLICY:
+//    • Full attendance          → full salary (no deduction)
+//    • Weekends + holidays      → no deduction (implicit in full salary)
+//    • Paid casual leave (CL)   → no deduction
+//    • Absent working day       → deduct perDay
+//    • Half day                 → deduct halfDayPay
+//    • Unpaid / sick / earned   → deduct perDay per day
+//
+//  EXAMPLE (30-day month, salary 8000):
+//    perDay = 8000 / 30 = 266.67
+//    2 absent → 266.67 × 2 = 533.34 deducted
+//    net = 8000 - 533.34 = 7466.66 
 // ─────────────────────────────────────────────
 
 
@@ -148,13 +45,12 @@ const buildSalaryData = async (userId, month, year) => {
     const user = await User.findById(userId);
     if (!user || !user.salary?.monthly) return null;
 
+    const monthlySalary = user.salary.monthly;
     const start = new Date(year, month - 1, 1);
     const end = new Date(year, month, 0, 23, 59, 59, 999);
     const totalCalendarDays = new Date(year, month, 0).getDate();
 
-    const perDay = Number((user.salary.monthly / totalCalendarDays).toFixed(2));
-    const halfDayPay = Number((perDay / 2).toFixed(2));
-
+    // ── Holidays ──────────────────────────────────────────
     const holidays = await Holiday.find({ date: { $gte: start, $lte: end } });
     const holidaySet = new Set(
         holidays.map(h => {
@@ -165,18 +61,30 @@ const buildSalaryData = async (userId, month, year) => {
     );
     const holidayCount = holidays.length;
 
+    // ── Weekends ──────────────────────────────────────────
     let totalWeekends = 0;
     for (let d = 1; d <= totalCalendarDays; d++) {
         if (isWeekend(new Date(year, month - 1, d))) totalWeekends++;
     }
 
-    let workingDays = 0;
+    // ── Working days = Mon–Fri minus holidays ─────────────
+    // This is what the employee is EXPECTED to work
+    let totalWorkingDays = 0;
     for (let d = 1; d <= totalCalendarDays; d++) {
         const cur = new Date(year, month - 1, d);
         cur.setHours(0, 0, 0, 0);
-        if (!isWeekend(cur) && !holidaySet.has(cur.getTime())) workingDays++;
+        if (!isWeekend(cur) && !holidaySet.has(cur.getTime())) {
+            totalWorkingDays++;
+        }
     }
 
+    if (totalCalendarDays === 0) return null; // safety guard
+
+    // ── Per-day rate ──────────────────────────────────────
+    const perDay = round2(monthlySalary / totalCalendarDays);
+    const halfDayPay = round2(perDay / 2);
+
+    // ── Approved leaves this month ────────────────────────
     const leaves = await Leave.find({
         user: userId,
         status: "approved",
@@ -184,6 +92,7 @@ const buildSalaryData = async (userId, month, year) => {
         toDate: { $gte: start },
     });
 
+    // Build set of leave working-day timestamps (to exclude from absent calculation)
     const leaveDaySet = new Set();
     leaves.forEach(l => {
         const from = new Date(l.fromDate);
@@ -191,7 +100,12 @@ const buildSalaryData = async (userId, month, year) => {
         for (let d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) {
             const day = new Date(d);
             day.setHours(0, 0, 0, 0);
-            if (day >= start && day <= end && !isWeekend(day) && !holidaySet.has(day.getTime())) {
+            if (
+                day >= start &&
+                day <= end &&
+                !isWeekend(day) &&
+                !holidaySet.has(day.getTime())
+            ) {
                 leaveDaySet.add(day.getTime());
             }
         }
@@ -199,69 +113,85 @@ const buildSalaryData = async (userId, month, year) => {
 
     let paidLeave = 0;
     let unpaidLeave = 0;
+
     leaves.forEach(l => {
-        paidLeave += l.paidDays || 0;
-        unpaidLeave += l.unpaidDays || 0;
+        if (l.type === "casual") {
+            paidLeave += l.paidDays || 0;
+            unpaidLeave += l.unpaidDays || 0;
+        } else {
+            unpaidLeave += l.totalDays || 0;
+        }
     });
 
+    // ── Attendance records ────────────────────────────────
     const records = await Attendance.find({
         user: userId,
         date: { $gte: start, $lte: end },
     });
 
-    let present = 0;
-    let halfDays = 0;
-    let totalOvertime = 0;
+    let present = 0;  // full present days (NOT including half-day records)
+    let halfDays = 0;  // half-day records
 
     records.forEach(a => {
         const d = new Date(a.date);
         d.setHours(0, 0, 0, 0);
+
+        // Skip weekends — no deduction, no earning needed
         if (isWeekend(d)) return;
+
+        // Skip holidays — no deduction, no earning needed
         if (holidaySet.has(d.getTime())) return;
+
+        // Skip leave days — already counted via paidLeave/unpaidLeave
         if (leaveDaySet.has(d.getTime())) return;
-        if (a.punchIn && !a.punchOut) return; // ← NEW LINE
 
         if (a.isHalfDay) {
             halfDays++;
         } else if (a.status === "present") {
             present++;
         }
-        totalOvertime += a.overtime || 0;
     });
 
-    const coveredDays = present + halfDays + leaveDaySet.size;
-    const absent = Math.max(0, workingDays - coveredDays);
+    // ── Absent days ───────────────────────────────────────
 
-    const basicEarnings = Number(((present + paidLeave + holidayCount + totalWeekends) * perDay).toFixed(2));
-    const halfDayEarnings = Number((halfDays * halfDayPay).toFixed(2));
-    const overtimePay = 0;
+    const coveredSlots = present + halfDays + leaveDaySet.size;
+    const absentDays = Math.max(0, totalWorkingDays - coveredSlots);
 
-    const deductions = Number(((unpaidLeave + absent) * perDay).toFixed(2));
-    const netSalary = Number(Math.max(0, basicEarnings + halfDayEarnings + overtimePay - deductions).toFixed(2));
+    // ── Earnings ──────────────────────────────────────────
+    const absentAmt = round2(absentDays * perDay);
+    const halfDayDeduct = round2(halfDays * halfDayPay);
+    const unpaidLeaveAmt = round2(unpaidLeave * perDay);
+    const totalDeductions = round2(absentAmt + halfDayDeduct + unpaidLeaveAmt);
+    const netSalary = round2(Math.max(0, monthlySalary - totalDeductions));
 
     return {
-        monthlySalary: user.salary.monthly,
+        monthlySalary,
         perDaySalary: perDay,
+        halfDaySalary: halfDayPay,
         presentDays: present,
         halfDays,
-        absentDays: absent,
+        absentDays,
         paidLeave,
         unpaidLeave,
         holidays: holidayCount,
         weekends: totalWeekends,
-        totalWorkingDays: workingDays,
+        totalWorkingDays,
         totalCalendarDays,
-        basicEarnings,
-        halfDayEarnings,
-        overtimePay,
-        deductions,
+        absentAmt,
+        halfDayDeduct,
+        unpaidLeaveAmt,
+        deductions: totalDeductions,
         netSalary,
     };
 };
 
+function round2(n) {
+    return Math.round(n * 100) / 100;
+}
 
-
-
+// ─────────────────────────────────────────────
+//  GENERATE PAYROLL  (HR)
+// ─────────────────────────────────────────────
 const generatePayroll = async (req, res) => {
     try {
         const { month, year, employeeId } = req.body;
@@ -271,7 +201,8 @@ const generatePayroll = async (req, res) => {
             return res.status(400).json({ success: false, message: "month and year are required" });
         }
 
-        const m = parseInt(month), y = parseInt(year);
+        const m = parseInt(month);
+        const y = parseInt(year);
 
         let users;
         if (employeeId) {
@@ -293,10 +224,16 @@ const generatePayroll = async (req, res) => {
         for (const user of users) {
             try {
                 const exists = await Payroll.findOne({ employee: user._id, month: m, year: y });
-                if (exists) { skipped.push({ name: user.name, reason: "Already generated" }); continue; }
+                if (exists) {
+                    skipped.push({ name: user.name, reason: "Already generated" });
+                    continue;
+                }
 
                 const data = await buildSalaryData(user._id, m, y);
-                if (!data) { skipped.push({ name: user.name, reason: "No salary configured" }); continue; }
+                if (!data) {
+                    skipped.push({ name: user.name, reason: "No salary configured" });
+                    continue;
+                }
 
                 const payroll = await Payroll.create({
                     employee: user._id,
@@ -308,11 +245,14 @@ const generatePayroll = async (req, res) => {
 
                 results.push(payroll);
 
+                const monthName = new Date(y, m - 1)
+                    .toLocaleString("default", { month: "long" });
+
                 await createNotification(
                     io,
                     user._id,
                     "Payslip Generated 📄",
-                    `Your payslip for ${new Date(y, m - 1).toLocaleString("default", { month: "long" })} ${y} has been generated`,
+                    `Your payslip for ${monthName} ${y} has been generated`,
                     "payroll",
                     { payrollId: payroll._id }
                 );
@@ -336,7 +276,6 @@ const generatePayroll = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 
 // ─────────────────────────────────────────────
 //  GET ALL PAYROLLS  (HR)
@@ -362,7 +301,6 @@ const getAllPayrolls = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 
 // ─────────────────────────────────────────────
 //  MARK AS PAID  (HR)
@@ -404,7 +342,6 @@ const markAsPaid = async (req, res) => {
     }
 };
 
-
 // ─────────────────────────────────────────────
 //  BULK MARK PAID  (HR)
 // ─────────────────────────────────────────────
@@ -427,10 +364,16 @@ const bulkMarkPaid = async (req, res) => {
             await p.save();
             count++;
 
-            const monthName = new Date(p.year, p.month - 1).toLocaleString("default", { month: "long" });
-            await createNotification(io, p.employee._id, "Salary Paid 💰",
+            const monthName = new Date(p.year, p.month - 1)
+                .toLocaleString("default", { month: "long" });
+
+            await createNotification(
+                io,
+                p.employee._id,
+                "Salary Paid 💰",
                 `Your salary of ₹${p.netSalary.toLocaleString()} for ${monthName} ${p.year} has been paid`,
-                "payroll", { payrollId: p._id }
+                "payroll",
+                { payrollId: p._id }
             );
         }
 
@@ -440,7 +383,6 @@ const bulkMarkPaid = async (req, res) => {
     }
 };
 
-
 // ─────────────────────────────────────────────
 //  DELETE PAYROLL  (HR — draft only)
 // ─────────────────────────────────────────────
@@ -448,8 +390,9 @@ const deletePayroll = async (req, res) => {
     try {
         const payroll = await Payroll.findById(req.params.id);
         if (!payroll) return res.status(404).json({ success: false, message: "Payroll not found" });
-        if (payroll.status === "paid") return res.status(400).json({ success: false, message: "Cannot delete a paid payroll" });
-
+        if (payroll.status === "paid") {
+            return res.status(400).json({ success: false, message: "Cannot delete a paid payroll" });
+        }
         await Payroll.findByIdAndDelete(req.params.id);
         res.json({ success: true, message: "Payroll deleted" });
     } catch (error) {
@@ -457,12 +400,8 @@ const deletePayroll = async (req, res) => {
     }
 };
 
-
 // ─────────────────────────────────────────────
 //  GET MY PAYROLLS  (Employee)
-//  ✅ FIX: Added .populate("employee") so the
-//     PDF generator receives full employee data
-//     instead of a bare ObjectId string.
 // ─────────────────────────────────────────────
 const getMyPayrolls = async (req, res) => {
     try {
@@ -479,7 +418,6 @@ const getMyPayrolls = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 
 // ─────────────────────────────────────────────
 //  GET SINGLE PAYROLL  (HR or owner)
@@ -508,7 +446,6 @@ const getPayroll = async (req, res) => {
     }
 };
 
-
 // ─────────────────────────────────────────────
 //  PAYROLL SUMMARY STATS  (HR dashboard)
 // ─────────────────────────────────────────────
@@ -533,16 +470,15 @@ const getPayrollStats = async (req, res) => {
                 total: all.length,
                 paid: paid.length,
                 draft: draft.length,
-                totalNet: Number(totalNet.toFixed(2)),
-                paidAmount: Number(paidAmount.toFixed(2)),
-                draftAmount: Number(draftAmount.toFixed(2)),
+                totalNet: round2(totalNet),
+                paidAmount: round2(paidAmount),
+                draftAmount: round2(draftAmount),
             },
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 
 module.exports = {
     generatePayroll,

@@ -12,6 +12,8 @@ const isWeekend = (date) => {
 };
 
 
+function round2(n) { return Math.round(n * 100) / 100; }
+
 // ─────────────────────────────────────────────
 //  GET MONTHLY SALARY
 // ─────────────────────────────────────────────
@@ -70,28 +72,34 @@ const getMonthlySalary = async (req, res) => {
         }
 
         // ── DATE RANGE ────────────────────────────
-        const start = new Date(year, month - 1, 1);
-        const end = new Date(year, month, 0, 23, 59, 59);
+        const monthStart = new Date(year, month - 1, 1);
+        const monthEnd = new Date(year, month, 0, 23, 59, 59);
+
+        const joiningDate = user.joiningDate ? new Date(user.joiningDate) : null;
+        const start = (joiningDate && joiningDate > monthStart)
+            ? new Date(joiningDate.getFullYear(), joiningDate.getMonth(), joiningDate.getDate())
+            : monthStart;
+        const end = monthEnd;
 
         // Total calendar days in month (used for perDay calculation)
         const totalCalendarDays = new Date(year, month, 0).getDate();
 
         // ── PER DAY SALARY ────────────────────────
-        // Divide by total calendar days because weekends + holidays are also paid.
-        // This ensures present+weekends+holidays+leaves always sums back to monthly.
-        const perDay = Number((user.salary.monthly / totalCalendarDays).toFixed(2));
-        const halfDayPay = Number((perDay / 2).toFixed(2));
+        const perDay = round2(user.salary.monthly / totalCalendarDays);
+        const halfDayPay = round2(perDay / 2);
 
         // ── HOLIDAYS ──────────────────────────────
         const holidays = await Holiday.find({
             date: { $gte: start, $lte: end },
         });
 
-        const holidayDates = holidays.map(h => {
-            const d = new Date(h.date);
-            d.setHours(0, 0, 0, 0);
-            return d.getTime();
-        });
+        const holidayDates = new Set(
+            holidays.map(h => {
+                const d = new Date(h.date);
+                d.setHours(0, 0, 0, 0);
+                return d.getTime();
+            })
+        );
 
         const holidayCount = holidays.length;
 
@@ -108,7 +116,7 @@ const getMonthlySalary = async (req, res) => {
         for (let d = 1; d <= totalCalendarDays; d++) {
             const current = new Date(year, month - 1, d);
             current.setHours(0, 0, 0, 0);
-            if (!isWeekend(current) && !holidayDates.includes(current.getTime())) {
+            if (!isWeekend(current) && !holidayDates.has(current.getTime())) {
                 workingDays++;
             }
         }
@@ -126,6 +134,9 @@ const getMonthlySalary = async (req, res) => {
         leaves.forEach(l => {
             const from = new Date(l.fromDate);
             const to = new Date(l.toDate);
+            // Normalize to local midnight to avoid timezone boundary shifts
+            from.setHours(0, 0, 0, 0);
+            to.setHours(23, 59, 59, 999);
             for (let d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) {
                 const day = new Date(d);
                 day.setHours(0, 0, 0, 0);
@@ -133,7 +144,7 @@ const getMonthlySalary = async (req, res) => {
                     day >= start &&
                     day <= end &&
                     !isWeekend(day) &&
-                    !holidayDates.includes(day.getTime())
+                    !holidayDates.has(day.getTime())
                 ) {
                     leaveDays++;
                 }
@@ -146,8 +157,12 @@ const getMonthlySalary = async (req, res) => {
         let unpaidLeave = 0;
 
         leaves.forEach(l => {
-            paidLeave += l.paidDays || 0;
-            unpaidLeave += l.unpaidDays || 0;
+            if (l.type === "casual") {
+                paidLeave += l.paidDays || 0;
+                unpaidLeave += l.unpaidDays || 0;
+            } else {
+                unpaidLeave += l.totalDays || 0;
+            }
         });
 
         // ── ATTENDANCE ────────────────────────────
@@ -159,48 +174,60 @@ const getMonthlySalary = async (req, res) => {
         let present = 0;
         let halfDays = 0;
 
+        const leaveDaySet = new Set();
+        leaves.forEach(l => {
+            const from = new Date(l.fromDate);
+            const to = new Date(l.toDate);
+            from.setHours(0, 0, 0, 0);
+            to.setHours(23, 59, 59, 999);
+            for (let d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) {
+                const day = new Date(d);
+                day.setHours(0, 0, 0, 0);
+                if (day >= start && day <= end) {
+                    leaveDaySet.add(day.getTime());
+                }
+            }
+        });
+
         attendanceRecords.forEach(a => {
             const d = new Date(a.date);
             d.setHours(0, 0, 0, 0);
 
-            // Skip weekends — they are auto-paid, not counted as present
             if (isWeekend(d)) return;
-
-            // Skip holidays — they are auto-paid
-            if (holidayDates.includes(d.getTime())) return;
-
-            // Skip leave days — already counted in paidLeave / unpaidLeave
-            const isOnLeave = leaves.some(l => {
-                const from = new Date(l.fromDate);
-                const to = new Date(l.toDate);
-                from.setHours(0, 0, 0, 0);
-                to.setHours(23, 59, 59, 999);
-                return d >= from && d <= to;
-            });
-            if (isOnLeave) return;
+            if (holidayDates.has(d.getTime())) return;
+            if (leaveDaySet.has(d.getTime())) return;
 
             if (a.isHalfDay) halfDays++;
             else if (a.status === "present") present++;
         });
 
+
         // ── ABSENT ────────────────────────────────
         // Absent = working days not covered by present, half-days, or leaves
-        const accountedDays = present + halfDays + leaveDays;
+        const accountedDays = present + halfDays + leaveDaySet.size;
         const absent = Math.max(0, workingDays - accountedDays);
 
-        // ── SALARY FORMULA ────────────────────────
+        // ── SALARY FORMULA ────────────────────────────────────
         //
-        //  Paid days  = present + paid leaves + holidays + weekends
-        //  Half days  = halfDays * 0.5 perDay
-        //  Deductions = unpaid leaves + absents
+        //  Start = full monthlySalary
+        //  Deduct only:
+        //    absentDays  × perDay
+        //    halfDays    × halfDayPay
+        //    unpaidLeave × perDay
         //
-        const totalSalary =
-            ((present + paidLeave + holidayCount + totalWeekends) * perDay) +
-            (halfDays * halfDayPay) -
-            (unpaidLeave * perDay) -
-            (absent * perDay);
+        //  Paid CL, weekends, holidays → no deduction
+        //
+        const absentAmt = round2(absent * perDay);
+        const halfDayDeduct = round2(halfDays * halfDayPay);
+        const unpaidLeaveAmt = round2(unpaidLeave * perDay);
+        const totalDeductions = round2(absentAmt + halfDayDeduct + unpaidLeaveAmt);
 
-        const finalSalary = Number(Math.max(0, totalSalary).toFixed(2));
+        // If future month OR employee had zero presence (no present, no half days, no leave) → salary is 0
+        const hasAnyPresence = present > 0 || halfDays > 0 || paidLeave > 0 || unpaidLeave > 0;
+
+        const finalSalary = hasAnyPresence
+            ? round2(Math.max(0, user.salary.monthly - totalDeductions))
+            : 0;
 
         // ── RESPONSE ──────────────────────────────
         res.json({
@@ -209,24 +236,22 @@ const getMonthlySalary = async (req, res) => {
                 name: user.name,
                 employeeId: user.employeeId,
                 monthlySalary: user.salary.monthly,
-                perDaySalary: perDay,
-                halfDaySalary: halfDayPay,
-
-                // Attendance breakdown
+                perDaySalary: hasAnyPresence ? perDay : 0,
+                halfDaySalary: hasAnyPresence ? halfDayPay : 0,
                 presentDays: present,
                 halfDays,
-                leaveDays,
+                leaveDays: leaveDaySet.size,
                 paidLeave,
                 unpaidLeave,
-                absentDays: absent,
-
-                // Calendar info
-                totalCalendarDays,
-                totalWeekends,
-                holidays: holidayCount,
-                totalWorkingDays: workingDays,
-
-                // Final
+                absentDays: hasAnyPresence ? absent : 0,
+                totalCalendarDays: hasAnyPresence ? totalCalendarDays : 0,
+                totalWeekends: hasAnyPresence ? totalWeekends : 0,
+                holidays: hasAnyPresence ? holidayCount : 0,
+                totalWorkingDays: hasAnyPresence ? workingDays : 0,
+                absentAmt: hasAnyPresence ? absentAmt : 0,
+                halfDayDeduct: hasAnyPresence ? halfDayDeduct : 0,
+                unpaidLeaveAmt: hasAnyPresence ? unpaidLeaveAmt : 0,
+                totalDeductions: hasAnyPresence ? totalDeductions : 0,
                 totalSalary: finalSalary,
             },
         });

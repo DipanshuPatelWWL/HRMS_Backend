@@ -648,6 +648,169 @@ const getSalesUsers = async (req, res) => {
 };
 
 
+
+const uploadEmployeeDocument = async (req, res) => {
+    try {
+        const targetId = req.params.id || req.user._id;
+        const docType = req.params.type; // aadhaar | pan | passbook | other
+        const validTypes = ["aadhaar", "pan", "passbook", "other"];
+
+        if (!validTypes.includes(docType)) {
+            return res.status(400).json({ success: false, message: "Invalid document type" });
+        }
+
+        if (!req.file) {
+            return res.status(400).json({ success: false, message: "No file uploaded" });
+        }
+
+        if (
+            req.user.role === "employee" &&
+            req.user._id.toString() !== targetId.toString()
+        ) {
+            return res.status(403).json({ success: false, message: "Access denied" });
+        }
+
+        const fileUrl = `/uploads/documents/${req.file.filename}`;
+        const originalName = req.file.originalname;
+        const label = req.body.label || "Other Document";
+
+        let update;
+        if (docType === "other") {
+            // push a new entry into the others array
+            update = {
+                $push: {
+                    "documents.others": {
+                        url: fileUrl,
+                        originalName,
+                        label,
+                        uploadedAt: new Date(),
+                        verified: false,
+                        verifiedAt: null,
+                        verifiedBy: null,
+                    },
+                },
+            };
+        } else {
+            update = {
+                $set: {
+                    [`documents.${docType}`]: {
+                        url: fileUrl,
+                        originalName,
+                        uploadedAt: new Date(),
+                        verified: false,
+                        verifiedAt: null,
+                        verifiedBy: null,
+                    },
+                },
+            };
+        }
+
+        const user = await User.findByIdAndUpdate(targetId, update, { new: true }).select("+documents");
+        if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+        res.status(200).json({
+            success: true,
+            message: "Document uploaded successfully",
+            documents: user.documents,
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+// ─────────────────────────────────────────────
+//  GET EMPLOYEE DOCUMENTS
+//  GET /users/me/documents
+//  GET /users/:id/documents  (HR/manager)
+// ─────────────────────────────────────────────
+const getEmployeeDocuments = async (req, res) => {
+    try {
+        const targetId = req.params.id || req.user._id;
+
+        if (
+            req.user.role === "employee" &&
+            req.user._id.toString() !== targetId.toString()
+        ) {
+            return res.status(403).json({ success: false, message: "Access denied" });
+        }
+
+        const user = await User.findById(targetId)
+            .select("+documents")
+            .populate("documents.aadhaar.verifiedBy", "name")
+            .populate("documents.pan.verifiedBy", "name")
+            .populate("documents.passbook.verifiedBy", "name")
+            .populate("documents.others.verifiedBy", "name");
+
+        if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+        res.status(200).json({ success: true, documents: user.documents });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+// ─────────────────────────────────────────────
+//  VERIFY DOCUMENT  (HR / manager only)
+//  PUT /users/:id/documents/:type/verify
+//  PUT /users/:id/documents/other/:otherId/verify
+// ─────────────────────────────────────────────
+const verifyEmployeeDocument = async (req, res) => {
+    try {
+        const { id: targetId, type, otherId } = req.params;
+
+        // if otherId exists → this is OTHER document verification
+        const docType = otherId ? "other" : type;
+
+        const validTypes = ["aadhaar", "pan", "passbook", "other"];
+
+        if (!validTypes.includes(docType)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid document type",
+            });
+        }
+
+        let update;
+        if (docType === "other") {
+            // verify a specific entry inside the others array
+            update = {
+                $set: {
+                    "documents.others.$[elem].verified": true,
+                    "documents.others.$[elem].verifiedAt": new Date(),
+                    "documents.others.$[elem].verifiedBy": req.user._id,
+                },
+            };
+        } else {
+            update = {
+                $set: {
+                    [`documents.${docType}.verified`]: true,
+                    [`documents.${docType}.verifiedAt`]: new Date(),
+                    [`documents.${docType}.verifiedBy`]: req.user._id,
+                },
+            };
+        }
+
+        const options = docType === "other"
+            ? { new: true, arrayFilters: [{ "elem._id": otherId }] }
+            : { new: true };
+
+        const user = await User.findByIdAndUpdate(targetId, update, options).select("+documents");
+        if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+        res.status(200).json({
+            success: true,
+            message: "Document verified",
+            documents: user.documents,
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+
 module.exports = {
     createUserByHR,
     getAllUsers,
@@ -665,5 +828,8 @@ module.exports = {
     updateGovernmentId,
     getBankDetails,
     updateBankDetails,
-    getSalesUsers
+    getSalesUsers,
+    uploadEmployeeDocument,
+    getEmployeeDocuments,
+    verifyEmployeeDocument,
 };

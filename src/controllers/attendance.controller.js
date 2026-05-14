@@ -1063,12 +1063,27 @@ const getMonthlyAttendance = async (req, res) => {
 
         const lateQuotaUsed = records.filter(a => a.isLate).length;
 
+        const totalWorkHours = parseFloat(
+            records.reduce((sum, r) => sum + (r.workHours || 0), 0).toFixed(2)
+        );
+        const totalLateMinutes = Math.round(records.reduce((sum, r) => sum + (r.lateMinutes || 0), 0));
+        const workedDays = records.filter(r => r.workHours > 0).length;
+        const avgDailyHours = workedDays
+            ? parseFloat((totalWorkHours / workedDays).toFixed(2))
+            : 0;
+
         res.json({
             success: true,
             lateQuotaUsed,
             lateQuotaMax: MONTHLY_LATE_QUOTA,
             count: fullData.length,
             data: fullData,
+            summary: {
+                totalWorkHours,
+                totalLateMinutes,
+                avgDailyHours,
+                workedDays,
+            },
         });
 
     } catch (error) {
@@ -1432,6 +1447,15 @@ const getHRAttendanceOverview = async (req, res) => {
                 return acc + diff;
             }, 0);
 
+            const totalWorkHours = parseFloat(
+                empRecords.reduce((sum, r) => sum + (r.workHours || 0), 0).toFixed(2)
+            );
+            const totalLateMinutes = Math.round(empRecords.reduce((sum, r) => sum + (r.lateMinutes || 0), 0));
+            const workedDays = empRecords.filter(r => r.workHours > 0).length;
+            const avgDailyHours = workedDays
+                ? parseFloat((totalWorkHours / workedDays).toFixed(2))
+                : 0;
+
             return {
                 _id: emp._id,
                 name: emp.name,
@@ -1439,7 +1463,10 @@ const getHRAttendanceOverview = async (req, res) => {
                 department: emp.department,
                 designation: emp.designation,
                 role: emp.role,
-                stats: { presentDays, halfDays, lateDays, absentDays, leaveDays },
+                stats: {
+                    presentDays, halfDays, lateDays, absentDays, leaveDays,
+                    totalWorkHours, totalLateMinutes, avgDailyHours, workedDays,
+                },
             };
         });
 
