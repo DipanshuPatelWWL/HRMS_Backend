@@ -17,7 +17,13 @@ const generateToken = (user) => {
 
 const signup = async (req, res) => {
     try {
-        const { name, email, password, employeeId } = req.body;
+        const {
+            name,
+            email,
+            password,
+            employeeId,
+            department,
+        } = req.body;
 
         const existingUser = await User.findOne({
             $or: [{ email }, { employeeId }],
@@ -38,6 +44,7 @@ const signup = async (req, res) => {
             email,
             password: hashedPassword,
             employeeId,
+            department: department,
             role: "employee"
         });
 

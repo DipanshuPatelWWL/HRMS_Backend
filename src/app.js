@@ -27,6 +27,7 @@ const celebrationTemplateRoutes = require("./routes/celebrationTemplate.routes")
 const AIRoutes = require("./routes/ai.routes");
 const HRAIRoutes = require("./routes/hr.ai.routes");
 const DailyReportRoutes = require("./routes/dailyReports.routes");
+const AssetsRoutes = require("./routes/assetRoutes");
 
 
 const app = express();
@@ -116,6 +117,7 @@ app.use("/api/celebrationTemplate", celebrationTemplateRoutes);
 app.use("/api/ai", AIRoutes);
 app.use("/api/hr-ai", HRAIRoutes);
 app.use("/api", DailyReportRoutes);
+app.use("/api/assets", AssetsRoutes);
 
 // ✅ EXPORT (IMPORTANT)
 module.exports = { app, server };
