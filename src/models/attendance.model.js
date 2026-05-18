@@ -13,6 +13,10 @@ const attendanceSchema = new mongoose.Schema(
             type: Date,
             required: true,
         },
+        dateString: {
+            type: String,
+            index: true,
+        },
 
         punchIn: {
             type: Date,

@@ -5,7 +5,7 @@ const Leave = require("../models/leave.model");
 const { createNotification, broadcastNotification } = require("./notification.controller");
 const { sendMail } = require("../services/emailClient");
 const moment = require("moment-timezone");
-
+const isDev = process.env.NODE_ENV !== "production";
 // ─────────────────────────────────────────────
 //  OFFICE CONFIG
 // ─────────────────────────────────────────────
@@ -119,8 +119,9 @@ const punchIn = async (req, res) => {
         const nowDate = now.toDate();
 
         // Attendance date
-        const today = now.clone().startOf("day").toDate();
+        const todayStart = now.clone().startOf("day").toDate();
         const todayEnd = now.clone().endOf("day").toDate();
+        const todayString = now.clone().format("YYYY-MM-DD");
 
         // ─────────────────────────────────────────────
         // WEEKEND CHECK
@@ -137,7 +138,7 @@ const punchIn = async (req, res) => {
         // ─────────────────────────────────────────────
         const holiday = await Holiday.findOne({
             date: {
-                $gte: today,
+                $gte: todayStart,
                 $lte: todayEnd,
             },
         });
@@ -167,8 +168,8 @@ const punchIn = async (req, res) => {
         const leave = await Leave.findOne({
             user: userId,
             status: "approved",
-            fromDate: { $lte: today },
-            toDate: { $gte: today },
+            fromDate: { $lte: todayEnd },
+            toDate: { $gte: todayStart },
         });
 
         if (leave) {
@@ -181,7 +182,7 @@ const punchIn = async (req, res) => {
         // ─────────────────────────────────────────────
         // GEOFENCE CHECK
         // ─────────────────────────────────────────────
-        if (!isOfflinePunch) {
+        if (!isOfflinePunch && !isDev) {
 
             if (lat === undefined || lng === undefined) {
                 return res.status(400).json({
@@ -204,7 +205,6 @@ const punchIn = async (req, res) => {
                 });
             }
 
-            // Correct GPS accuracy logic
             if (
                 accuracy !== undefined &&
                 Number(accuracy) > 150
@@ -221,7 +221,7 @@ const punchIn = async (req, res) => {
         // ─────────────────────────────────────────────
         const existing = await Attendance.findOne({
             user: userId,
-            date: today,
+            dateString: todayString,
         });
 
         if (existing) {
@@ -354,24 +354,21 @@ const punchIn = async (req, res) => {
 
             attendance = await Attendance.create({
                 user: userId,
-                date: today,
+                date: todayStart,
+                dateString: todayString,
                 punchIn: nowDate,
                 lateMinutes,
                 isLate,
                 isHalfDay,
                 status,
-
                 location: {
                     lat,
                     lng,
                     accuracy,
                 },
-
                 deviceId: deviceId || "",
                 wifiSSID: wifiSSID || "",
-
                 isOfflinePunch: !!isOfflinePunch,
-
                 syncedAt: isOfflinePunch
                     ? serverNow.toDate()
                     : null,
@@ -394,27 +391,23 @@ const punchIn = async (req, res) => {
         // EMAIL ALERT
         // ─────────────────────────────────────────────
         if (isHalfDay || isLate) {
-
-            const employee = await User
-                .findById(userId)
-                .select("email name");
-
-            await sendMail({
-                to: employee.email,
-                subject: isHalfDay
-                    ? "⚠️ Half Day Marked"
-                    : "⏰ Late Arrival Recorded",
-
-                html: `
-                    <p>
-                        Hi ${employee.name},
-                        your punch-in at
-                        <b>${formatTime(nowDate)}</b>
-                        has been recorded as
-                        <b>${isHalfDay ? "Half Day" : "Late"}</b>.
-                    </p>
-                `,
-            });
+            User.findById(userId).select("email name").then(employee => {
+                sendMail({
+                    to: employee.email,
+                    subject: isHalfDay
+                        ? "⚠️ Half Day Marked"
+                        : "⏰ Late Arrival Recorded",
+                    html: `
+                <p>
+                    Hi ${employee.name},
+                    your punch-in at
+                    <b>${formatTime(nowDate)}</b>
+                    has been recorded as
+                    <b>${isHalfDay ? "Half Day" : "Late"}</b>.
+                </p>
+            `,
+                }).catch(err => console.error("Email error (punchIn):", err));
+            }).catch(err => console.error("User fetch error (punchIn):", err));
         }
 
         // ─────────────────────────────────────────────
@@ -579,15 +572,9 @@ const punchOut = async (req, res) => {
 
         const nowDate = now.toDate();
 
-        const today = now
-            .clone()
-            .startOf("day")
-            .toDate();
-
-        const todayEnd = now
-            .clone()
-            .endOf("day")
-            .toDate();
+        const todayString = now.clone().format("YYYY-MM-DD");
+        const todayStart = now.clone().startOf("day").toDate();
+        const todayEnd = now.clone().endOf("day").toDate();
 
         // ─────────────────────────────────────────────
         // OFFICE TIMING CHECK
@@ -616,7 +603,7 @@ const punchOut = async (req, res) => {
         // ─────────────────────────────────────────────
         const holiday = await Holiday.findOne({
             date: {
-                $gte: today,
+                $gte: todayStart,
                 $lte: todayEnd,
             },
         });
@@ -633,7 +620,7 @@ const punchOut = async (req, res) => {
         // ─────────────────────────────────────────────
         const attendance = await Attendance.findOne({
             user: userId,
-            date: today,
+            dateString: todayString,
         });
 
         if (!attendance) {
@@ -729,47 +716,21 @@ const punchOut = async (req, res) => {
         // ─────────────────────────────────────────────
         // SEND EMAIL
         // ─────────────────────────────────────────────
-        if (
-            attendance.isHalfDay &&
-            !alreadyHalfDay
-        ) {
-
-            const employee = await User
-                .findById(userId)
-                .select("email name");
-
-            await sendMail({
-                to: employee.email,
-
-                subject:
-                    "⚠️ Half Day Marked",
-
-                html: `
-                    <p>
-                        Hi ${employee.name},
-                    </p>
-
-                    <p>
-                        Your attendance has been marked as
-                        <b>Half Day</b>.
-                    </p>
-
-                    <p>
-                        Reason:
-                        <b>${halfDayReason}</b>
-                    </p>
-
-                    <p>
-                        Punch Out Time:
-                        <b>${formatTime(nowDate)}</b>
-                    </p>
-
-                    <p>
-                        Total Work Hours:
-                        <b>${workHours} hrs</b>
-                    </p>
-                `,
-            });
+        if (attendance.isHalfDay && !alreadyHalfDay) {
+            // ✅ Fire and forget — don't block the punch-out response
+            User.findById(userId).select("email name").then(employee => {
+                sendMail({
+                    to: employee.email,
+                    subject: "⚠️ Half Day Marked",
+                    html: `
+                <p>Hi ${employee.name},</p>
+                <p>Your attendance has been marked as <b>Half Day</b>.</p>
+                <p>Reason: <b>${halfDayReason}</b></p>
+                <p>Punch Out Time: <b>${formatTime(nowDate)}</b></p>
+                <p>Total Work Hours: <b>${workHours} hrs</b></p>
+            `,
+                }).catch(err => console.error("Email error (punchOut):", err));
+            }).catch(err => console.error("User fetch error (punchOut):", err));
         }
 
         // ─────────────────────────────────────────────
@@ -896,13 +857,18 @@ const getTodayAttendance = async (req, res) => {
     try {
         const userId = req.user._id;
 
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
+        //  IST — matches how punchIn saves the date
+        const nowIST = moment().tz("Asia/Kolkata");
+        const todayString = nowIST.clone().format("YYYY-MM-DD");
+        const todayEnd = nowIST.clone().endOf("day").toDate();
 
-        const attendance = await Attendance.findOne({ user: userId, date: today });
+        const attendance = await Attendance.findOne({
+            user: userId,
+            dateString: todayString,
+        });
 
-        const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-        const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0, 23, 59, 59);
+        const monthStart = nowIST.clone().startOf("month").toDate();
+        const monthEnd = nowIST.clone().endOf("month").toDate();
 
         const lateQuotaUsed = await Attendance.countDocuments({
             user: userId,
@@ -930,44 +896,6 @@ const getTodayAttendance = async (req, res) => {
 //  GET MONTHLY ATTENDANCE
 // ─────────────────────────────────────────────
 
-
-// const getMonthlyAttendance = async (req, res) => {
-//     try {
-//         const { month, year } = req.query;
-
-//         if (!month || !year) {
-//             return res.status(400).json({
-//                 success: false,
-//                 message: "month and year are required",
-//             });
-//         }
-
-//         const start = new Date(year, month - 1, 1);
-//         const end = new Date(year, month, 0, 23, 59, 59);
-
-//         const data = await Attendance.find({
-//             user: req.user._id,
-//             date: { $gte: start, $lte: end },
-//         }).sort({ date: 1 });
-
-//         const lateQuotaUsed = data.filter(a => a.isLate).length;
-
-//         res.json({
-//             success: true,
-//             lateQuotaUsed,
-//             lateQuotaMax: MONTHLY_LATE_QUOTA,
-//             count: data.length,
-//             data,
-//         });
-
-//     } catch (error) {
-//         res.status(500).json({
-//             success: false,
-//             message: error.message,
-//         });
-//     }
-// };
-
 const getMonthlyAttendance = async (req, res) => {
     try {
         const { month, year } = req.query;
@@ -986,8 +914,8 @@ const getMonthlyAttendance = async (req, res) => {
             ? new Date(new Date(user.joiningDate).setHours(0, 0, 0, 0))
             : null;
 
-        const start = new Date(year, month - 1, 1);
-        const end = new Date(year, month, 0, 23, 59, 59);
+        const start = moment.tz(`${year}-${String(month).padStart(2, '0')}-01`, "Asia/Kolkata").startOf("month").toDate();
+        const end = moment.tz(`${year}-${String(month).padStart(2, '0')}-01`, "Asia/Kolkata").endOf("month").toDate();
 
         // ✅ Get actual attendance records
         const records = await Attendance.find({
@@ -1066,7 +994,11 @@ const getMonthlyAttendance = async (req, res) => {
         const totalWorkHours = parseFloat(
             records.reduce((sum, r) => sum + (r.workHours || 0), 0).toFixed(2)
         );
-        const totalLateMinutes = Math.round(records.reduce((sum, r) => sum + (r.lateMinutes || 0), 0));
+        const totalLateMinutes = Math.round(
+            records
+                .filter(r => r.isLate)
+                .reduce((sum, r) => sum + (r.lateMinutes || 0), 0)
+        );
         const workedDays = records.filter(r => r.workHours > 0).length;
         const avgDailyHours = workedDays
             ? parseFloat((totalWorkHours / workedDays).toFixed(2))
@@ -1165,8 +1097,8 @@ const getTeamAttendance = async (req, res) => {
 
         const teamIds = teamMembers.map(m => m._id);
 
-        const start = new Date(year, month - 1, 1);
-        const end = new Date(year, month, 0, 23, 59, 59);
+        const start = moment.tz(`${year}-${String(month).padStart(2, '0')}-01`, "Asia/Kolkata").startOf("month").toDate();
+        const end = moment.tz(`${year}-${String(month).padStart(2, '0')}-01`, "Asia/Kolkata").endOf("month").toDate();
 
         // Get all attendance records for team this month
         const records = await Attendance.find({
@@ -1339,8 +1271,8 @@ const getHRAttendanceOverview = async (req, res) => {
             return res.status(400).json({ success: false, message: "month and year are required" });
         }
 
-        const start = new Date(year, month - 1, 1);
-        const end = new Date(year, month, 0, 23, 59, 59);
+        const start = moment.tz(`${year}-${String(month).padStart(2, '0')}-01`, "Asia/Kolkata").startOf("month").toDate();
+        const end = moment.tz(`${year}-${String(month).padStart(2, '0')}-01`, "Asia/Kolkata").endOf("month").toDate();
 
         // All active employees + tl + managers
         const allEmployees = await User.find({

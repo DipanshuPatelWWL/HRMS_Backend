@@ -230,60 +230,6 @@ const getAllLeaves = async (req, res) => {
 };
 
 
-// ─────────────────────────────────────────────
-//  TL APPROVAL
-//  TL can approve (passes to Manager) or
-//  reject (final — stops the chain)
-// ─────────────────────────────────────────────
-// const approveByTL = async (req, res) => {
-//     try {
-//         const { id } = req.params;
-//         const { action } = req.body;
-
-//         if (!["approved", "rejected"].includes(action)) {
-//             return res.status(400).json({ success: false, message: "Invalid action" });
-//         }
-
-//         const leave = await Leave.findById(id);
-//         if (!leave) {
-//             return res.status(404).json({ success: false, message: "Leave not found" });
-//         }
-
-//         if (leave.tlApproval.status !== "pending") {
-//             return res.status(400).json({ success: false, message: "TL already acted on this leave" });
-//         }
-
-//         if (leave.status !== "pending") {
-//             return res.status(400).json({ success: false, message: "Leave already finalized" });
-//         }
-
-//         leave.tlApproval = {
-//             status: action,
-//             actionBy: req.user._id,
-//             actionDate: new Date(),
-//         };
-
-//         // TL rejection is final — approval just passes chain to Manager
-//         if (action === "rejected") {
-//             leave.status = "rejected";
-
-//             await createNotification(
-//                 leave.user,
-//                 "Leave Rejected",
-//                 "Your leave request has been rejected by your TL",
-//                 "leave"
-//             );
-//         }
-
-//         await leave.save();
-
-//         res.status(200).json({ success: true, message: `TL ${action}`, leave });
-
-//     } catch (error) {
-//         res.status(500).json({ success: false, message: error.message });
-//     }
-// };
-
 const approveByTL = async (req, res) => {
     try {
         const { id } = req.params;
@@ -431,65 +377,6 @@ const approveByManager = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
-
-// ─────────────────────────────────────────────
-//  HR APPROVAL (final authority)
-//  ✅ FIX: Only HR triggers balance deduction
-//          and attendance cleanup — once, here
-// ─────────────────────────────────────────────
-// const approveByHR = async (req, res) => {
-//     try {
-//         const { id } = req.params;
-//         const { action } = req.body;
-//         const io = req.app.get("io");
-
-//         if (!["approved", "rejected"].includes(action)) {
-//             return res.status(400).json({ success: false, message: "Invalid action" });
-//         }
-
-//         const leave = await Leave.findById(id).populate("user", "name");
-//         if (!leave) return res.status(404).json({ success: false, message: "Leave not found" });
-
-//         if (leave.hrApproval.status !== "pending") {
-//             return res.status(400).json({ success: false, message: "HR already acted on this leave" });
-//         }
-//         if (leave.status !== "pending") {
-//             return res.status(400).json({ success: false, message: "Leave already finalized" });
-//         }
-
-//         leave.hrApproval = {
-//             status: action,
-//             actionBy: req.user._id,
-//             actionDate: new Date(),
-//         };
-
-//         leave.status = action === "approved" ? "approved" : "rejected";
-
-//         if (action === "approved") {
-//             await finalizeApproval(leave);
-//         }
-
-//         await leave.save();
-
-//         // ✅ Notify employee — io passed correctly
-//         await createNotification(
-//             io,
-//             leave.user._id,
-//             action === "approved" ? "Leave Approved ✅" : "Leave Rejected ❌",
-//             action === "approved"
-//                 ? `Your ${leave.type} leave (${leave.totalDays} days) has been approved by HR`
-//                 : `Your ${leave.type} leave request was rejected by HR`,
-//             action === "approved" ? "leave_approved" : "leave_rejected",
-//             { leaveId: leave._id, paidDays: leave.paidDays, unpaidDays: leave.unpaidDays }
-//         );
-
-//         res.status(200).json({ success: true, message: `HR ${action} leave`, leave });
-
-//     } catch (error) {
-//         res.status(500).json({ success: false, message: error.message });
-//     }
-// };
 
 
 const approveByHR = async (req, res) => {
