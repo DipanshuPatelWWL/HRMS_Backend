@@ -49,7 +49,7 @@ const io = new Server(server, {
         origin: [
             // "http://localhost:5173",
             // "http://localhost:5174",
-            "https://wwlhrms.digitalwebguider.com/"
+            "https://wwlhrms.digitalwebguider.com"
         ],
         methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
         credentials: true,
