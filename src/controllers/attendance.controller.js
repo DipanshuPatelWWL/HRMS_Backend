@@ -184,10 +184,17 @@ const punchIn = async (req, res) => {
         // ─────────────────────────────────────────────
         if (!isOfflinePunch && !isDev) {
 
-            if (lat === undefined || lng === undefined) {
+            if (lat === undefined || lat === null || lng === undefined || lng === null) {
                 return res.status(400).json({
                     success: false,
-                    message: "Location required",
+                    message: "Location coordinates are required. Please enable GPS and try again.",
+                });
+            }
+
+            if (isNaN(Number(lat)) || isNaN(Number(lng))) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Invalid location coordinates received.",
                 });
             }
 

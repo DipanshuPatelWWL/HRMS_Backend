@@ -134,6 +134,13 @@ const applyLeave = async (req, res) => {
             });
         }
 
+        // ── Determine if TL approval should be skipped ──
+        const requestingUser = await User.findById(userId).select("role designation department");
+        const skipTL =
+            requestingUser.role === "tl" ||
+            requestingUser.designation === "Business Development Manager" ||
+            requestingUser.designation === "Business Development Executive";
+
         // ── Create leave ──────────────────────────
         const leave = await Leave.create({
             user: userId,
@@ -145,6 +152,13 @@ const applyLeave = async (req, res) => {
             totalDays,
             reason,
             attachment: attachment || "",
+            tlApproval: skipTL
+                ? { status: "approved", actionBy: userId, actionDate: new Date() }
+                : { status: "pending", actionBy: null, actionDate: null },
+            skipTLApproval: skipTL,
+            userRole: requestingUser.role,
+            userDesignation: requestingUser.designation || "",
+            userDepartment: requestingUser.department || "",
         });
 
         const employee = await User.findById(leave.user).select("email name");
@@ -161,9 +175,12 @@ const applyLeave = async (req, res) => {
         // ── Notify HR, Manager and TL ✅ ─────────────────────────────────────
         const io = req.app.get("io");
 
+        // If TL approval skipped, notify only HR/Manager; otherwise notify TL too
+        const notifyRoles = skipTL ? ["hr", "manager"] : ["hr", "tl"];
+
         await broadcastNotification(
             io,
-            ["hr", "tl"],
+            notifyRoles,
             "New Leave Request 📋",
             `${userName} applied for ${type} leave (${totalDays} day${totalDays > 1 ? "s" : ""})`,
             "leave_applied",
@@ -207,9 +224,18 @@ const getMyLeaves = async (req, res) => {
 const getAllLeaves = async (req, res) => {
     try {
         const { status, limit } = req.query;
+        const requestingUser = req.user;
 
         const filter = {};
         if (status) filter.status = status;
+
+        // ── TL sees only their own department's leaves ──
+        if (requestingUser.role === "tl") {
+            const tlUser = await User.findById(requestingUser._id).select("department");
+            if (tlUser?.department) {
+                filter.userDepartment = tlUser.department;
+            }
+        }
 
         let query = Leave.find(filter)
             .populate("user", "name email role employeeId")
@@ -243,6 +269,19 @@ const approveByTL = async (req, res) => {
         const leave = await Leave.findById(id).populate("user", "name email");
         if (!leave) {
             return res.status(404).json({ success: false, message: "Leave not found" });
+        }
+
+        // ── TL can only act on their own department's leaves ──
+        const tlUser = await User.findById(req.user._id).select("department");
+        if (
+            tlUser?.department &&
+            leave.userDepartment &&
+            tlUser.department !== leave.userDepartment
+        ) {
+            return res.status(403).json({
+                success: false,
+                message: "You can only approve leaves from your own department",
+            });
         }
 
         if (leave.tlApproval.status !== "pending") {
@@ -392,8 +431,8 @@ const approveByHR = async (req, res) => {
         const leave = await Leave.findById(id).populate("user", "name email");
         if (!leave) return res.status(404).json({ success: false, message: "Leave not found" });
 
-        // ✅ NEW: TL must approve before HR can act
-        if (leave.tlApproval.status !== "approved") {
+        // ── Skip TL check if leave was marked to skip TL approval ──
+        if (!leave.skipTLApproval && leave.tlApproval.status !== "approved") {
             return res.status(400).json({
                 success: false,
                 message: "TL approval is required before HR can act on this leave",

@@ -99,12 +99,27 @@ const userSchema = new mongoose.Schema(
             trim: true,
         },
 
+        bloodGroup: {
+            type: String,
+            enum: ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-", ""],
+            default: "",
+        },
+
+        emergencyContact: {
+            name: { type: String, default: "", trim: true },
+            phone: { type: String, default: "", trim: true },
+            relation: { type: String, default: "", trim: true },
+        },
+
+
         // ─── Personal Details ─────────────────────────────────────────
         maritalStatus: {
             type: String,
             enum: ["single", "married", "divorced", "widowed", "other"],
             default: null,
         },
+
+
 
         nationality: {
             type: String,

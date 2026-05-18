@@ -39,7 +39,10 @@ const getMonthlySalary = async (req, res) => {
         }
 
         // ── ACCESS CONTROL ────────────────────────
-        if (req.user.role !== "hr" && req.user.role !== "manager") {
+        const isAdminViewer = req.user.role === "hr" || req.user.role === "manager";
+
+        if (!isAdminViewer) {
+            // Anyone can only view their own salary
             if (req.user._id.toString() !== userId) {
                 return res.status(403).json({
                     success: false,
@@ -47,19 +50,22 @@ const getMonthlySalary = async (req, res) => {
                 });
             }
 
-            if (!user.canViewSalary) {
-                return res.status(403).json({
-                    success: false,
-                    message: "Salary not released by HR yet",
-                });
-            }
+            // TL: always allowed to see their salary (no canViewSalary gate)
+            if (req.user.role !== "tl") {
+                if (!user.canViewSalary) {
+                    return res.status(403).json({
+                        success: false,
+                        message: "Salary not released by HR yet",
+                    });
+                }
 
-            const currentDate = new Date().getDate();
-            if (currentDate < 10) {
-                return res.status(403).json({
-                    success: false,
-                    message: "Salary is available after the 10th of each month",
-                });
+                const currentDate = new Date().getDate();
+                if (currentDate < 10) {
+                    return res.status(403).json({
+                        success: false,
+                        message: "Salary is available after the 10th of each month",
+                    });
+                }
             }
         }
 

@@ -58,13 +58,32 @@ const createUserByHR = async (req, res) => {
 
         if (phone) {
             const cleanPhone = phone.toString().replace(/\D/g, "");
-            if (cleanPhone.length !== 12 || !cleanPhone.startsWith("91")) {
+            const isValid =
+                /^[0-9]{10}$/.test(cleanPhone) ||
+                (/^91[0-9]{10}$/.test(cleanPhone));
+            if (!isValid) {
                 return res.status(400).json({
                     success: false,
-                    message: "Please add a valid mobile number with country code (e.g. 919876543210)",
+                    message: "Enter a valid 10-digit mobile number",
                 });
             }
         }
+
+        const allowedRolesByCreator = {
+            hr: ["employee", "tl"],
+            manager: ["employee", "tl", "hr", "manager"],
+            superadmin: ["employee", "tl", "hr", "manager", "superadmin"],
+        };
+        const creatorRole = req.user.role;
+        const targetRole = role || "employee";
+        const permitted = allowedRolesByCreator[creatorRole] || [];
+        if (!permitted.includes(targetRole)) {
+            return res.status(403).json({
+                success: false,
+                message: `${creatorRole.toUpperCase()} cannot create a user with role "${targetRole}"`,
+            });
+        }
+        // ─────────────────────────────────────────────────────
 
         const existingUser = await User.findOne({ email });
         if (existingUser) {
@@ -316,7 +335,15 @@ const updateUserStatus = async (req, res) => {
 // ─────────────────────────────────────────────
 const updateMyProfile = async (req, res) => {
     try {
-        const ALLOWED_FIELDS = ["phone", "dob", "avatar", "maritalStatus", "nationality", "guardianName"];
+        const ALLOWED_FIELDS = [
+            "phone", "dob", "avatar", "maritalStatus", "nationality",
+            "guardianName", "bloodGroup", "emergencyContact",
+        ];
+
+        // HR and Manager can also update their own name, email, phone
+        const PRIVILEGED_FIELDS = ["name", "email"];
+        const isPrivileged = ["hr", "manager", "superadmin"].includes(req.user.role);
+
         const updates = {};
 
         ALLOWED_FIELDS.forEach(field => {
@@ -325,8 +352,25 @@ const updateMyProfile = async (req, res) => {
             }
         });
 
+        if (isPrivileged) {
+            PRIVILEGED_FIELDS.forEach(field => {
+                if (req.body[field] !== undefined) {
+                    updates[field] = req.body[field];
+                }
+            });
+        }
+
         if (Object.keys(updates).length === 0) {
             return res.status(400).json({ success: false, message: "No valid fields to update" });
+        }
+
+        // If email is being updated, check it's not taken
+        if (updates.email) {
+            const existing = await User.findOne({ email: updates.email.toLowerCase() });
+            if (existing && existing._id.toString() !== req.user._id.toString()) {
+                return res.status(400).json({ success: false, message: "Email already in use" });
+            }
+            updates.email = updates.email.toLowerCase().trim();
         }
 
         const user = await User.findByIdAndUpdate(
@@ -517,7 +561,15 @@ const updateBankDetails = async (req, res) => {
     try {
         const targetId = req.params.id || req.user._id;
         const { accountHolderName, accountNumber, bankName, ifscCode, branchName, accountType } = req.body;
+        if (!accountHolderName || !accountNumber || !ifscCode) {
+            return res.status(400).json({
+                success: false,
+                message: "accountHolderName, accountNumber and ifscCode are required",
+            });
+        }
+
         const user2 = await User.findById(targetId);
+        if (!user2) return res.status(404).json({ success: false, message: "User not found" });
 
         const normalize = (str) =>
             str.toLowerCase().replace(/\s+/g, " ").trim();
@@ -526,13 +578,6 @@ const updateBankDetails = async (req, res) => {
             return res.status(400).json({
                 success: false,
                 message: "Account holder name must match your profile name",
-            });
-        }
-
-        if (!accountHolderName || !accountNumber || !ifscCode) {
-            return res.status(400).json({
-                success: false,
-                message: "accountHolderName, accountNumber and ifscCode are required",
             });
         }
 

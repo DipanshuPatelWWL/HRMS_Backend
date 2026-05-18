@@ -111,7 +111,7 @@ const notifyWelcome = async (to, { employeeName, employeeId, designation, depart
 
         <!-- Login Button -->
         <div style="text-align:center;margin:0 0 24px;">
-            <a href="http://localhost:5173"
+            <a href="https://wwlhrms.digitalwebguider.com"
                style="display:inline-block;background:#1a237e;color:#ffffff;font-size:15px;font-weight:600;padding:13px 36px;border-radius:8px;text-decoration:none;letter-spacing:0.3px;">
                 Login to HRMS →
             </a>

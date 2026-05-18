@@ -9,6 +9,9 @@ const leaveSchema = new mongoose.Schema(
         },
         userName: { type: String },
         employeeId: { type: String },
+        userRole: { type: String, default: "" },
+        userDesignation: { type: String, default: "" },
+        userDepartment: { type: String, default: "" },
 
         type: {
             type: String,
@@ -32,6 +35,9 @@ const leaveSchema = new mongoose.Schema(
             enum: ["pending", "approved", "rejected"],
             default: "pending",
         },
+
+        // Flag to indicate TL approval is not required for this leave
+        skipTLApproval: { type: Boolean, default: false },
 
         tlApproval: {
             status: { type: String, enum: ["pending", "approved", "rejected"], default: "pending" },
