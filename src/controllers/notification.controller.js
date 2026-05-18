@@ -95,7 +95,30 @@ const broadcastNotification = async (
 /* GET /notifications */
 const getMyNotifications = async (req, res) => {
     try {
-        const data = await Notification.find({ user: req.user._id })
+        const { role, _id: userId } = req.user;
+
+        let userIds = [userId]; // default: own only
+
+        if (role === "hr" || role === "manager" || role === "admin") {
+            /* HR / Manager / Admin → all notifications */
+            const data = await Notification.find({})
+                .sort({ createdAt: -1 })
+                .limit(100)
+                .lean();
+            return res.json({ success: true, data });
+        }
+
+        if (role === "tl") {
+            /* TL → own + their direct reports */
+            const teamMembers = await User.find({ reportingTo: userId })
+                .select("_id")
+                .lean();
+            const teamIds = teamMembers.map(u => u._id);
+            userIds = [userId, ...teamIds];
+        }
+
+        /* employee (or tl with team) */
+        const data = await Notification.find({ user: { $in: userIds } })
             .sort({ createdAt: -1 })
             .limit(50)
             .lean();
@@ -109,10 +132,23 @@ const getMyNotifications = async (req, res) => {
 /* GET /notifications/unread-count */
 const getUnreadCount = async (req, res) => {
     try {
-        const count = await Notification.countDocuments({
-            user: req.user._id,
-            isRead: false,
-        });
+        const { role, _id: userId } = req.user;
+
+        let query = { isRead: false };
+
+        if (role === "hr" || role === "manager" || role === "admin") {
+            /* no user filter — count all unread */
+        } else if (role === "tl") {
+            const teamMembers = await User.find({ reportingTo: userId })
+                .select("_id")
+                .lean();
+            const teamIds = teamMembers.map(u => u._id);
+            query.user = { $in: [userId, ...teamIds] };
+        } else {
+            query.user = userId;
+        }
+
+        const count = await Notification.countDocuments(query);
         res.json({ success: true, count });
     } catch (err) {
         res.status(500).json({ success: false, message: "Failed to get count" });
@@ -135,10 +171,23 @@ const markAsRead = async (req, res) => {
 /* PUT /notifications/mark-all-read */
 const markAllRead = async (req, res) => {
     try {
-        await Notification.updateMany(
-            { user: req.user._id, isRead: false },
-            { isRead: true }
-        );
+        const { role, _id: userId } = req.user;
+
+        let filter = { isRead: false };
+
+        if (role === "hr" || role === "manager" || role === "admin") {
+            /* mark all unread in the system */
+        } else if (role === "tl") {
+            const teamMembers = await User.find({ reportingTo: userId })
+                .select("_id")
+                .lean();
+            const teamIds = teamMembers.map(u => u._id);
+            filter.user = { $in: [userId, ...teamIds] };
+        } else {
+            filter.user = userId;
+        }
+
+        await Notification.updateMany(filter, { isRead: true });
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ success: false, message: "Failed to mark all as read" });
@@ -148,7 +197,23 @@ const markAllRead = async (req, res) => {
 /* DELETE /notifications/clear */
 const clearAll = async (req, res) => {
     try {
-        await Notification.deleteMany({ user: req.user._id });
+        const { role, _id: userId } = req.user;
+
+        let filter = {};
+
+        if (role === "hr" || role === "manager" || role === "admin") {
+            /* clears everything — add extra auth check if needed */
+        } else if (role === "tl") {
+            const teamMembers = await User.find({ reportingTo: userId })
+                .select("_id")
+                .lean();
+            const teamIds = teamMembers.map(u => u._id);
+            filter.user = { $in: [userId, ...teamIds] };
+        } else {
+            filter.user = userId;
+        }
+
+        await Notification.deleteMany(filter);
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ success: false, message: "Failed to clear" });
