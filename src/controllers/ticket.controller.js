@@ -1,38 +1,6 @@
 const Ticket = require("../models/ticket.model");
-
-// ─── CREATE TICKET (Employee) ────────────────────────────────────────────────
-// const createTicket = async (req, res) => {
-//     try {
-//         const { title, description, category, priority } = req.body;
-
-//         if (!title || !description) {
-//             return res.status(400).json({
-//                 success: false,
-//                 message: "title and description are required",
-//             });
-//         }
-
-//         const ticket = await Ticket.create({
-//             user: req.user._id,
-//             title,
-//             description,
-//             category: category || "other",
-//             priority: priority || "medium",
-//         });
-
-//         const populated = await Ticket.findById(ticket._id)
-//             .populate("user", "name email employeeId");
-
-//         res.status(201).json({
-//             success: true,
-//             message: "Ticket raised successfully",
-//             ticket: populated,
-//         });
-//     } catch (error) {
-//         res.status(500).json({ success: false, message: error.message });
-//     }
-// };
-
+const User = require("../models/user.model");
+const { createNotification, broadcastNotification } = require("./notification.controller");
 
 const createTicket = async (req, res) => {
     try {
@@ -63,6 +31,21 @@ const createTicket = async (req, res) => {
 
         const populated = await Ticket.findById(ticket._id)
             .populate("user", "name email employeeId");
+
+        // ── Notify HR & managers about new ticket ──
+        try {
+            const io = req.app.get("io");
+            await broadcastNotification(
+                io,
+                ["hr", "manager"],
+                `New Ticket: ${title}`,
+                `${populated.user.name} raised a helpdesk ticket`,
+                "ticket_replied",
+                { ticketId: ticket._id }
+            );
+        } catch (notifErr) {
+            console.error("createTicket notification error:", notifErr.message);
+        }
 
         res.status(201).json({
             success: true,
@@ -211,6 +194,35 @@ const addReply = async (req, res) => {
             .populate("assignedTo", "name email")
             .populate("replies.sentBy", "name role");
 
+        // ── Notify the other party ──
+        try {
+            const io = req.app.get("io");
+
+            if (isStaff) {
+                // Staff replied → notify the ticket owner
+                await createNotification(
+                    io,
+                    ticket.user,
+                    `Reply on your ticket`,
+                    `Staff replied to: "${ticket.title}"`,
+                    "ticket_replied",
+                    { ticketId: ticket._id }
+                );
+            } else {
+                // Employee replied → notify HR & managers
+                await broadcastNotification(
+                    io,
+                    ["hr", "manager"],
+                    `Employee replied on ticket`,
+                    `New reply on: "${ticket.title}"`,
+                    "ticket_replied",
+                    { ticketId: ticket._id }
+                );
+            }
+        } catch (notifErr) {
+            console.error("addReply notification error:", notifErr.message);
+        }
+
         res.status(200).json({
             success: true,
             message: "Reply added",
@@ -260,6 +272,25 @@ const updateTicketStatus = async (req, res) => {
             .populate("replies.sentBy", "name role")
             .populate("resolvedBy", "name email");
 
+        // ── Notify employee if resolved or closed ──
+        try {
+            if (status === "resolved" || status === "closed") {
+                const io = req.app.get("io");
+                await createNotification(
+                    io,
+                    ticket.user,
+                    status === "resolved" ? "Ticket Resolved" : "Ticket Closed",
+                    status === "resolved"
+                        ? `Your ticket "${ticket.title}" has been resolved`
+                        : `Your ticket "${ticket.title}" has been closed`,
+                    status === "resolved" ? "ticket_resolved" : "ticket_replied",
+                    { ticketId: ticket._id }
+                );
+            }
+        } catch (notifErr) {
+            console.error("updateTicketStatus notification error:", notifErr.message);
+        }
+
         res.status(200).json({
             success: true,
             message: "Ticket updated",
@@ -269,6 +300,7 @@ const updateTicketStatus = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 // ─── CLOSE TICKET (Employee — close their own resolved ticket) ───────────────
 const closeTicket = async (req, res) => {

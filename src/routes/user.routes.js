@@ -28,7 +28,9 @@ const {
     getSalesUsers,
     uploadEmployeeDocument,
     getEmployeeDocuments,
-    verifyEmployeeDocument
+    verifyEmployeeDocument,
+    updateEmployeeShift,
+    bulkUpdateShift,
 } = require("../controllers/user.controller");
 
 
@@ -58,6 +60,7 @@ router.post(
 // ─── Static named routes (must be before /:id) ───────────────────────────────
 router.get("/tls", protect, allowRoles("hr", "manager", "superadmin"), getAllTLs);
 router.patch("/assign-team", protect, allowRoles("hr", "manager", "superadmin"), assignTeamToTL);
+router.put("/bulk-shift", protect, allowRoles("hr", "manager", "superadmin"), bulkUpdateShift);
 
 
 // ─── Admin / HR ───────────────────────────────────────────────────────────────
@@ -148,6 +151,22 @@ router.put(
     allowRoles("hr", "manager", "superadmin"),
     verifyEmployeeDocument
 );
+
+
+// ─── Shift routes ─────────────────────────────────────────────────────────────
+router.put(
+    "/:id/shift",
+    protect,
+    allowRoles("hr", "manager", "superadmin"),
+    updateEmployeeShift
+);
+
+// router.put(
+//     "/bulk-shift",           // must be BEFORE /:id routes
+//     protect,
+//     allowRoles("hr", "manager", "superadmin"),
+//     bulkUpdateShift
+// );
 
 
 

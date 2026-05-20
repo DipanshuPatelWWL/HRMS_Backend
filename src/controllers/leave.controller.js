@@ -1,9 +1,9 @@
 const Leave = require("../models/leave.model");
 const User = require("../models/user.model");
 const Attendance = require("../models/attendance.model");
-const { createNotification, broadcastNotification } = require("./notification.controller");
+const { createNotification, broadcastNotification, notifyLeaveApplied: notifyLeaveAppliedSocket } = require("./notification.controller");
 const Holiday = require("../models/holiday.model");
-const { notifyLeaveApplied, notifyLeaveApproved, notifyLeaveRejected } = require("../services/emailNotify");
+const { notifyLeaveApplied: notifyLeaveAppliedEmail, notifyLeaveApproved, notifyLeaveRejected } = require("../services/emailNotify");
 
 // ─────────────────────────────────────────────
 //  HELPER — count working days in a range
@@ -162,7 +162,7 @@ const applyLeave = async (req, res) => {
         });
 
         const employee = await User.findById(leave.user).select("email name");
-        await notifyLeaveApplied(employee.email, {
+        await notifyLeaveAppliedEmail(employee.email, {
             employeeName: userName,
             leaveType: type,
             fromDate,
@@ -175,17 +175,27 @@ const applyLeave = async (req, res) => {
         // ── Notify HR, Manager and TL ✅ ─────────────────────────────────────
         const io = req.app.get("io");
 
-        // If TL approval skipped, notify only HR/Manager; otherwise notify TL too
-        const notifyRoles = skipTL ? ["hr", "manager"] : ["hr", "tl"];
-
-        await broadcastNotification(
-            io,
-            notifyRoles,
-            "New Leave Request 📋",
-            `${userName} applied for ${type} leave (${totalDays} day${totalDays > 1 ? "s" : ""})`,
-            "leave_applied",
-            { leaveId: leave._id, userId }
-        );
+        if (skipTL) {
+            // TL approval skipped — notify only HR & Manager via broadcast (no TL needed)
+            await broadcastNotification(
+                io,
+                ["hr", "manager"],
+                "New Leave Request 📋",
+                `${userName} applied for ${type} leave (${totalDays} day${totalDays > 1 ? "s" : ""})`,
+                "leave_applied",
+                { leaveId: leave._id, userId }
+            );
+        } else {
+            // Notify ONLY this employee's direct TL + all HR
+            // (notifyLeaveApplied looks up applicant.reportingTo — no cross-dept spam)
+            await notifyLeaveAppliedSocket(
+                io,
+                userId,
+                "New Leave Request 📋",
+                `${userName} applied for ${type} leave (${totalDays} day${totalDays > 1 ? "s" : ""})`,
+                { leaveId: leave._id, userId }
+            );
+        }
 
         res.status(201).json({
             success: true,
@@ -401,6 +411,7 @@ const approveByManager = async (req, res) => {
         await finalizeApproval(leave);
         await leave.save();
 
+        // Notify employee
         await createNotification(
             io,
             leave.user._id,
@@ -408,6 +419,16 @@ const approveByManager = async (req, res) => {
             `Your ${leave.type} leave (${leave.totalDays} days) has been approved by Manager`,
             "leave_approved",
             { leaveId: leave._id, paidDays: leave.paidDays, unpaidDays: leave.unpaidDays }
+        );
+
+        // ── NEW: Notify the Manager who approved (self-confirmation) ──
+        await createNotification(
+            io,
+            req.user._id,
+            "Leave Approved ✅",
+            `You approved ${leave.user.name}'s ${leave.type} leave (${leave.totalDays} days). Paid: ${leave.paidDays}, Unpaid: ${leave.unpaidDays}`,
+            "leave_approved",
+            { leaveId: leave._id }
         );
 
         res.status(200).json({ success: true, message: "Manager approved leave", leave });
@@ -462,10 +483,18 @@ const approveByHR = async (req, res) => {
         await leave.save();
 
         if (action === "approved") {
+            // Notify employee
             await createNotification(io, leave.user._id, "Leave Approved ✅",
                 `Your ${leave.type} leave (${leave.totalDays} days) has been approved by HR`,
                 "leave_approved",
                 { leaveId: leave._id, paidDays: leave.paidDays, unpaidDays: leave.unpaidDays }
+            );
+
+            // ── NEW: Notify the HR who approved (self-confirmation) ──
+            await createNotification(io, req.user._id, "Leave Approved ✅",
+                `You approved ${leave.user.name}'s ${leave.type} leave (${leave.totalDays} days). Paid: ${leave.paidDays}, Unpaid: ${leave.unpaidDays}`,
+                "leave_approved",
+                { leaveId: leave._id }
             );
 
             await notifyLeaveApproved(leave.user.email, {
@@ -477,9 +506,17 @@ const approveByHR = async (req, res) => {
                 approvedBy: req.user.name,
             });
         } else {
+            // Notify employee
             await createNotification(io, leave.user._id, "Leave Rejected ❌",
                 `Your ${leave.type} leave request was rejected by HR`,
                 "leave_rejected", { leaveId: leave._id }
+            );
+
+            // ── NEW: Notify the HR who rejected (self-confirmation) ──
+            await createNotification(io, req.user._id, "Leave Rejected ❌",
+                `You rejected ${leave.user.name}'s ${leave.type} leave request.`,
+                "leave_rejected",
+                { leaveId: leave._id }
             );
 
             await notifyLeaveRejected(leave.user.email, {
@@ -692,7 +729,7 @@ const updateEmployeeLeaveBalance = async (req, res) => {
             user._id,
             "Leave Balance Updated 📋",
             `Your leave balance has been updated to ${total} days by HR.`,
-            "leave_applied",
+            "general",   // ← was "leave_applied"
             {}
         );
 

@@ -80,12 +80,6 @@ const userSchema = new mongoose.Schema(
             },
         },
 
-        shift: {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: "Shift",
-            default: null,
-        },
-
         avatar: {
             type: String,
             default: "",
@@ -233,11 +227,55 @@ const userSchema = new mongoose.Schema(
         salary: {
             monthly: { type: Number, default: 0 },
             perDay: { type: Number, default: 0 },
+
+            // ── Salary Structure (HR configures per employee) ──
+            structure: {
+                basic: { enabled: { type: Boolean, default: true }, percent: { type: Number, default: 40 } },
+                hra: { enabled: { type: Boolean, default: true }, percent: { type: Number, default: 20 } },
+                specialAllowance: { enabled: { type: Boolean, default: true }, percent: { type: Number, default: 25 } },
+                conveyance: { enabled: { type: Boolean, default: true }, percent: { type: Number, default: 10 } },
+                otherAllowance: { enabled: { type: Boolean, default: true }, percent: { type: Number, default: 5 } },
+            },
+
+            // ── Deductions (HR enables/configures per employee) ──
+            deductions: {
+                pf: {
+                    enabled: { type: Boolean, default: false },
+                    percent: { type: Number, default: 12 },
+                    pfNumber: { type: String, default: "", trim: true },
+                },
+                esi: {
+                    enabled: { type: Boolean, default: false },
+                    percent: { type: Number, default: 0.75 },
+                    esiNumber: { type: String, default: "", trim: true },
+                },
+                professionalTax: { enabled: { type: Boolean, default: false }, fixedAmount: { type: Number, default: 0 } },
+            },
         },
 
         canViewSalary: {
             type: Boolean,
             default: false,
+        },
+
+        // ─── Shift Configuration ───────────────────────────────────────────
+        shift: {
+            // "default" = 10:00–19:00 with quota rules
+            // "custom"  = custom timing, no quota rules
+            type: {
+                type: String,
+                enum: ["default", "custom"],
+                default: "default",
+            },
+            startHour: { type: Number, default: 10 },
+            startMinute: { type: Number, default: 0 },
+            endHour: { type: Number, default: 19 },
+            endMinute: { type: Number, default: 0 },
+            // Grace window (minutes after start) before marking late
+            graceMinutes: { type: Number, default: 15 },
+            // After graceMinutes → half day threshold (minutes after start)
+            halfDayAfterMinutes: { type: Number, default: 30 },
+            label: { type: String, default: "", trim: true },
         },
 
         leaveBalance: {

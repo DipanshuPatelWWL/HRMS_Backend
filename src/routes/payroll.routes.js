@@ -13,6 +13,7 @@ const {
     getMyPayrolls,
     getPayroll,
     getPayrollStats,
+    releasePayroll
 } = require("../controllers/payroll.controller");
 
 // ── Employee ─────────────────────────────────────────────
@@ -79,6 +80,13 @@ router.get(
     protect,
     allowRoles("employee", "tl", "manager", "hr", "superadmin"),
     getPayroll
+);
+
+router.put(
+    "/:id/release",
+    protect,
+    allowRoles("hr", "manager"),
+    releasePayroll
 );
 
 module.exports = router;

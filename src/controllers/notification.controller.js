@@ -90,6 +90,31 @@ const broadcastNotification = async (
     );
 };
 
+const notifyLeaveApplied = async (io, applicantId, title, message = "", meta = {}) => {
+    const applicant = await User.findById(applicantId)
+        .select("reportingTo")
+        .lean();
+
+    const targetIds = new Set();
+
+    /* Only THIS employee's direct TL */
+    if (applicant?.reportingTo) {
+        targetIds.add(applicant.reportingTo.toString());
+    }
+
+    /* All HR users */
+    const hrUsers = await User.find({ role: "hr" }).select("_id").lean();
+    hrUsers.forEach(u => targetIds.add(u._id.toString()));
+
+    if (!targetIds.size) return;
+
+    await Promise.allSettled(
+        [...targetIds].map(uid =>
+            createNotification(io, uid, title, message, "leave_applied", meta)
+        )
+    );
+};
+
 /* ─── HTTP route handlers ────────────────────────────────────────────────── */
 
 /* GET /notifications */
@@ -97,11 +122,20 @@ const getMyNotifications = async (req, res) => {
     try {
         const { role, _id: userId } = req.user;
 
-        let userIds = [userId]; // default: own only
-
         if (role === "hr" || role === "manager" || role === "admin") {
-            /* HR / Manager / Admin → all notifications */
-            const data = await Notification.find({})
+            // HR/Manager see:
+            // 1. ALL their own notifications (any type)
+            // 2. Other users' notifications ONLY if they are NOT type "system"
+            //    (system = personal notifications like shift change, password reset etc.)
+            const data = await Notification.find({
+                $or: [
+                    { user: userId },                   // own — everything
+                    {
+                        user: { $ne: userId },          // others — exclude personal ones
+                        type: { $ne: "system" },
+                    },
+                ],
+            })
                 .sort({ createdAt: -1 })
                 .limit(100)
                 .lean();
@@ -109,16 +143,29 @@ const getMyNotifications = async (req, res) => {
         }
 
         if (role === "tl") {
-            /* TL → own + their direct reports */
+            // TL sees own notifications + their direct reports' NON-system notifications
             const teamMembers = await User.find({ reportingTo: userId })
                 .select("_id")
                 .lean();
-            const teamIds = teamMembers.map(u => u._id);
-            userIds = [userId, ...teamIds];
+            const teamIds = teamMembers.map(u => u._id.toString());
+
+            const data = await Notification.find({
+                $or: [
+                    { user: userId },                        // own — everything
+                    {
+                        user: { $in: teamIds },              // team — exclude personal
+                        type: { $ne: "system" },
+                    },
+                ],
+            })
+                .sort({ createdAt: -1 })
+                .limit(50)
+                .lean();
+            return res.json({ success: true, data });
         }
 
-        /* employee (or tl with team) */
-        const data = await Notification.find({ user: { $in: userIds } })
+        // Employee — strictly their own notifications only
+        const data = await Notification.find({ user: userId })
             .sort({ createdAt: -1 })
             .limit(50)
             .lean();
@@ -134,18 +181,31 @@ const getUnreadCount = async (req, res) => {
     try {
         const { role, _id: userId } = req.user;
 
-        let query = { isRead: false };
+        let query;
 
         if (role === "hr" || role === "manager" || role === "admin") {
-            /* no user filter — count all unread */
+            query = {
+                isRead: false,
+                $or: [
+                    { user: userId },
+                    { user: { $ne: userId }, type: { $ne: "system" } },
+                ],
+            };
         } else if (role === "tl") {
             const teamMembers = await User.find({ reportingTo: userId })
                 .select("_id")
                 .lean();
-            const teamIds = teamMembers.map(u => u._id);
-            query.user = { $in: [userId, ...teamIds] };
+            const teamIds = teamMembers.map(u => u._id.toString());
+            query = {
+                isRead: false,
+                $or: [
+                    { user: userId },
+                    { user: { $in: teamIds }, type: { $ne: "system" } },
+                ],
+            };
         } else {
-            query.user = userId;
+            // Employee — only their own
+            query = { isRead: false, user: userId };
         }
 
         const count = await Notification.countDocuments(query);
@@ -173,18 +233,30 @@ const markAllRead = async (req, res) => {
     try {
         const { role, _id: userId } = req.user;
 
-        let filter = { isRead: false };
+        let filter;
 
         if (role === "hr" || role === "manager" || role === "admin") {
-            /* mark all unread in the system */
+            filter = {
+                isRead: false,
+                $or: [
+                    { user: userId },
+                    { user: { $ne: userId }, type: { $ne: "system" } },
+                ],
+            };
         } else if (role === "tl") {
             const teamMembers = await User.find({ reportingTo: userId })
                 .select("_id")
                 .lean();
-            const teamIds = teamMembers.map(u => u._id);
-            filter.user = { $in: [userId, ...teamIds] };
+            const teamIds = teamMembers.map(u => u._id.toString());
+            filter = {
+                isRead: false,
+                $or: [
+                    { user: userId },
+                    { user: { $in: teamIds }, type: { $ne: "system" } },
+                ],
+            };
         } else {
-            filter.user = userId;
+            filter = { isRead: false, user: userId };
         }
 
         await Notification.updateMany(filter, { isRead: true });
@@ -199,18 +271,29 @@ const clearAll = async (req, res) => {
     try {
         const { role, _id: userId } = req.user;
 
-        let filter = {};
+        let filter;
 
         if (role === "hr" || role === "manager" || role === "admin") {
-            /* clears everything — add extra auth check if needed */
+            // Only clear what they can see — not other users' system notifications
+            filter = {
+                $or: [
+                    { user: userId },
+                    { user: { $ne: userId }, type: { $ne: "system" } },
+                ],
+            };
         } else if (role === "tl") {
             const teamMembers = await User.find({ reportingTo: userId })
                 .select("_id")
                 .lean();
-            const teamIds = teamMembers.map(u => u._id);
-            filter.user = { $in: [userId, ...teamIds] };
+            const teamIds = teamMembers.map(u => u._id.toString());
+            filter = {
+                $or: [
+                    { user: userId },
+                    { user: { $in: teamIds }, type: { $ne: "system" } },
+                ],
+            };
         } else {
-            filter.user = userId;
+            filter = { user: userId };
         }
 
         await Notification.deleteMany(filter);
@@ -223,6 +306,7 @@ const clearAll = async (req, res) => {
 module.exports = {
     createNotification,
     broadcastNotification,
+    notifyLeaveApplied,
     getMyNotifications,
     getUnreadCount,
     markAsRead,

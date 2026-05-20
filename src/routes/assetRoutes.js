@@ -14,6 +14,7 @@ const {
     updateSystemPassword,
     retireAsset,
     getAssetHistory,
+    scanAssetBarcode,
 } = require("../controllers/asset.controller");
 
 const HR_ROLES = ["hr", "manager"];
@@ -21,6 +22,16 @@ const HR_ROLES = ["hr", "manager"];
 // ─── Employee self-view ───────────────────────────────────────────────────────
 // GET /api/assets/me
 router.get("/me", protect, getMyAssets);
+
+// ─── OCR Scan ─────────────────────────────────────────────────────────────────
+// POST /api/assets/scan
+router.post(
+    "/scan",
+    protect,
+    allowRoles(...HR_ROLES),
+    upload.single("image"),   // reuses your existing uploadAssetsImage middleware
+    scanAssetBarcode
+);
 
 // ─── HR / Admin routes ────────────────────────────────────────────────────────
 // GET  /api/assets/employee/:employeeId         → fetch employee assets

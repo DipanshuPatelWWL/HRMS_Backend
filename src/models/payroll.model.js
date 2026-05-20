@@ -15,6 +15,25 @@ const payrollSchema = new mongoose.Schema(
         // ── Salary Figures ───────────────────────────
         monthlySalary: { type: Number, required: true },
         perDaySalary: { type: Number, required: true },
+        halfDaySalary: { type: Number, default: 0 },
+        grossEarnings: { type: Number, default: 0 },
+
+        // ── Salary Structure Snapshot (at time of generation) ──
+        salaryStructure: {
+            basic: { enabled: Boolean, percent: Number, amount: Number },
+            hra: { enabled: Boolean, percent: Number, amount: Number },
+            specialAllowance: { enabled: Boolean, percent: Number, amount: Number },
+            conveyance: { enabled: Boolean, percent: Number, amount: Number },
+            otherAllowance: { enabled: Boolean, percent: Number, amount: Number },
+        },
+
+        // ── Statutory Deductions Snapshot ────────────
+        statutoryDeductions: {
+            pf: { enabled: Boolean, percent: Number, amount: Number, label: String, pfNumber: String },
+            esi: { enabled: Boolean, percent: Number, amount: Number, label: String, esiNumber: String },
+            professionalTax: { enabled: Boolean, fixedAmount: Number, amount: Number, label: String },
+        },
+        totalStatutoryDeductions: { type: Number, default: 0 },
 
         // ── Attendance Breakdown ─────────────────────
         presentDays: { type: Number, default: 0 },
@@ -27,11 +46,16 @@ const payrollSchema = new mongoose.Schema(
         totalWorkingDays: { type: Number, default: 0 },
         totalCalendarDays: { type: Number, default: 0 },
 
+        // ── Attendance Deductions ────────────────────
+        absentAmt: { type: Number, default: 0 },
+        halfDayDeduct: { type: Number, default: 0 },
+        unpaidLeaveAmt: { type: Number, default: 0 },
+
         // ── Earnings / Deductions ────────────────────
-        basicEarnings: { type: Number, default: 0 },  // present + paid leave + holiday + weekend pay
+        basicEarnings: { type: Number, default: 0 },
         halfDayEarnings: { type: Number, default: 0 },
         overtimePay: { type: Number, default: 0 },
-        deductions: { type: Number, default: 0 },  // absent + unpaid leave deductions
+        deductions: { type: Number, default: 0 },  // total attendance deductions
         netSalary: { type: Number, required: true },
 
         // ── Status ───────────────────────────────────
@@ -47,6 +71,12 @@ const payrollSchema = new mongoose.Schema(
         // ── Generation metadata ──────────────────────
         generatedAt: { type: Date, default: Date.now },
         generatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+
+        // ── Visibility ───────────────────────────────
+        // false = only HR/Manager can see; true = employee can see + download
+        isReleased: { type: Boolean, default: false },
+        releasedAt: { type: Date, default: null },
+        releasedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     },
     { timestamps: true }
 );

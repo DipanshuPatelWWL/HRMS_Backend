@@ -17,13 +17,6 @@ const celebrationSchema = new mongoose.Schema(
             required: false,
         },
 
-        // Stores which visual style was chosen from the frontend card picker
-        // e.g. "dark_purple", "corporate_blue", "warm_gold", "light_minimal"
-        templateStyle: {
-            type: String,
-            default: "",
-        },
-
         eventType: {
             type: String,
             enum: ["birthday", "anniversary", "custom"],
@@ -63,13 +56,19 @@ const celebrationSchema = new mongoose.Schema(
 
         status: {
             type: String,
-            enum: ["pending", "sent", "failed"],
+            enum: ["pending", "processing", "sent", "failed"],
             default: "pending",
+        },
 
-        }, templateStyle: {
+        templateStyle: {
             type: String,
             enum: ["dark_purple", "corporate_blue", "warm_gold", "light_minimal", ""],
-            default: "dark_purple",   // ← change from "" to "dark_purple"
+            default: "dark_purple",
+        },
+
+        sentAt: {
+            type: Date,
+            default: null,
         },
     },
     {

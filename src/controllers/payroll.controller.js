@@ -80,7 +80,66 @@ const buildSalaryData = async (userId, month, year) => {
 
     if (totalCalendarDays === 0) return null; // safety guard
 
+    // ── Salary Structure ──────────────────────────────────
+    const structure = user.salary?.structure || {};
+    const deductionCfg = user.salary?.deductions || {};
+
+    const COMPONENT_DEFAULTS = {
+        basic: { enabled: true, percent: 40 },
+        hra: { enabled: true, percent: 20 },
+        specialAllowance: { enabled: true, percent: 25 },
+        conveyance: { enabled: true, percent: 10 },
+        otherAllowance: { enabled: true, percent: 5 },
+    };
+
+    const COMPONENT_LABELS = {
+        basic: "Basic Salary",
+        hra: "HRA",
+        specialAllowance: "Special Allowance",
+        conveyance: "Conveyance / Internet",
+        otherAllowance: "Other Allowance",
+    };
+
+    // Build component amounts
+    const salaryStructureSnapshot = {};
+    for (const key of Object.keys(COMPONENT_DEFAULTS)) {
+        const cfg = structure[key] || COMPONENT_DEFAULTS[key];
+        const enabled = cfg.enabled ?? COMPONENT_DEFAULTS[key].enabled;
+        const percent = cfg.percent ?? COMPONENT_DEFAULTS[key].percent;
+        const amount = enabled ? round2((percent / 100) * monthlySalary) : 0;
+        salaryStructureSnapshot[key] = { enabled, percent, amount, label: COMPONENT_LABELS[key] };
+    }
+
+    const grossEarnings = round2(
+        Object.values(salaryStructureSnapshot).reduce((s, c) => s + c.amount, 0)
+    );
+    const basicAmt = salaryStructureSnapshot.basic.amount;
+
+    // ── Statutory Deductions ──────────────────────────────
+    const pfEnabled = deductionCfg.pf?.enabled ?? false;
+    const esiEnabled = deductionCfg.esi?.enabled ?? false;
+    const ptEnabled = deductionCfg.professionalTax?.enabled ?? false;
+
+    const pfPercent = deductionCfg.pf?.percent ?? 12;
+    const esiPercent = deductionCfg.esi?.percent ?? 0.75;
+    const ptFixed = deductionCfg.professionalTax?.fixedAmount ?? 0;
+
+    const pfNumber = deductionCfg.pf?.pfNumber || "";
+    const esiNumber = deductionCfg.esi?.esiNumber || "";
+
+    const pfAmount = pfEnabled ? round2((pfPercent / 100) * basicAmt) : 0;
+    const esiAmount = esiEnabled ? round2((esiPercent / 100) * grossEarnings) : 0;
+    const ptAmount = ptEnabled ? round2(ptFixed) : 0;
+
+    const statutoryDeductionsSnapshot = {
+        pf: { enabled: pfEnabled, percent: pfPercent, amount: pfAmount, label: "Provident Fund (PF)", pfNumber },
+        esi: { enabled: esiEnabled, percent: esiPercent, amount: esiAmount, label: "ESI", esiNumber },
+        professionalTax: { enabled: ptEnabled, fixedAmount: ptFixed, amount: ptAmount, label: "Professional Tax" },
+    };
+    const totalStatutoryDeductions = round2(pfAmount + esiAmount + ptAmount);
+
     // ── Per-day rate ──────────────────────────────────────
+    // perDay based on gross monthly divided by calendar days
     const perDay = round2(monthlySalary / totalCalendarDays);
     const halfDayPay = round2(perDay / 2);
 
@@ -154,20 +213,27 @@ const buildSalaryData = async (userId, month, year) => {
 
     // ── Absent days ───────────────────────────────────────
 
-    const coveredSlots = present + halfDays + leaveDaySet.size;
+    const coveredSlots = present + (halfDays * 0.5) + leaveDaySet.size;
     const absentDays = Math.max(0, totalWorkingDays - coveredSlots);
 
-    // ── Earnings ──────────────────────────────────────────
+    // ── Attendance Deductions ─────────────────────────────
     const absentAmt = round2(absentDays * perDay);
     const halfDayDeduct = round2(halfDays * halfDayPay);
     const unpaidLeaveAmt = round2(unpaidLeave * perDay);
-    const totalDeductions = round2(absentAmt + halfDayDeduct + unpaidLeaveAmt);
+    const totalAttendanceDeductions = round2(absentAmt + halfDayDeduct + unpaidLeaveAmt);
+
+    // ── Total Deductions & Net ────────────────────────────
+    const totalDeductions = round2(totalAttendanceDeductions + totalStatutoryDeductions);
     const netSalary = round2(Math.max(0, monthlySalary - totalDeductions));
 
     return {
         monthlySalary,
+        grossEarnings,
         perDaySalary: perDay,
         halfDaySalary: halfDayPay,
+        salaryStructure: salaryStructureSnapshot,
+        statutoryDeductions: statutoryDeductionsSnapshot,
+        totalStatutoryDeductions,
         presentDays: present,
         halfDays,
         absentDays,
@@ -322,6 +388,12 @@ const markAsPaid = async (req, res) => {
         payroll.paidAt = new Date();
         payroll.paidBy = req.user._id;
         payroll.remarks = remarks || "";
+
+        // Auto-release to employee when marked as paid
+        payroll.isReleased = true;
+        payroll.releasedAt = new Date();
+        payroll.releasedBy = req.user._id;
+
         await payroll.save();
 
         const monthName = new Date(payroll.year, payroll.month - 1)
@@ -361,6 +433,12 @@ const bulkMarkPaid = async (req, res) => {
             p.paidAt = new Date();
             p.paidBy = req.user._id;
             p.remarks = remarks || "";
+
+            // Auto-release to employee when marked as paid
+            p.isReleased = true;
+            p.releasedAt = new Date();
+            p.releasedBy = req.user._id;
+
             await p.save();
             count++;
 
@@ -405,7 +483,14 @@ const deletePayroll = async (req, res) => {
 // ─────────────────────────────────────────────
 const getMyPayrolls = async (req, res) => {
     try {
-        const payrolls = await Payroll.find({ employee: req.user._id })
+        // Employees only see released payrolls; HR/Manager see all their own
+        const isAdminViewer = ["hr", "manager"].includes(req.user.role);
+        const filter = { employee: req.user._id };
+        if (!isAdminViewer) {
+            filter.isReleased = true;
+        }
+
+        const payrolls = await Payroll.find(filter)
             .populate(
                 "employee",
                 "name email employeeId guardianName fatherName parentName department designation role joiningDate dob salary bankDetails governmentId"
@@ -438,6 +523,11 @@ const getPayroll = async (req, res) => {
 
         if (!isOwner && !isHR) {
             return res.status(403).json({ success: false, message: "Not authorized" });
+        }
+
+        // Employee can only view if payroll is released (paid)
+        if (isOwner && !isHR && !payroll.isReleased) {
+            return res.status(403).json({ success: false, message: "Payslip not yet released by HR" });
         }
 
         res.json({ success: true, payroll });
@@ -480,6 +570,28 @@ const getPayrollStats = async (req, res) => {
     }
 };
 
+
+const releasePayroll = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const payroll = await Payroll.findById(id);
+        if (!payroll) return res.status(404).json({ success: false, message: "Payroll not found" });
+
+        if (payroll.isReleased) {
+            return res.status(400).json({ success: false, message: "Already released" });
+        }
+
+        payroll.isReleased = true;
+        payroll.releasedAt = new Date();
+        payroll.releasedBy = req.user._id;
+        await payroll.save();
+
+        res.json({ success: true, message: "Payslip released to employee", payroll });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = {
     generatePayroll,
     getAllPayrolls,
@@ -489,4 +601,5 @@ module.exports = {
     getMyPayrolls,
     getPayroll,
     getPayrollStats,
+    releasePayroll
 };

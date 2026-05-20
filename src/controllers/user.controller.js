@@ -1,39 +1,26 @@
 const User = require("../models/user.model");
 const bcrypt = require("bcryptjs");
 const { validateBankDetails } = require("../utils/validators/bankDetails.validator");
-const { notifyWelcome } = require("../services/emailNotify");
+const { notifyWelcome, notifyShiftChanged } = require("../services/emailNotify");
 
 
 // ─────────────────────────────────────────────
 //  GENERATE EMPLOYEE ID
 // ─────────────────────────────────────────────
-const generateEmployeeId = async (name) => {
+const generateEmployeeId = async () => {
     const COMPANY_PREFIX = "WWL";
 
-    const parts = name.trim().split(" ");
-    let initials = "";
-
-    if (parts.length > 1) {
-        initials =
-            parts[0][0].toUpperCase() +
-            parts[parts.length - 1][0].toUpperCase();
-    } else {
-        initials = parts[0].substring(0, 2).toUpperCase();
-    }
-
     const lastUser = await User.findOne({
-        employeeId: new RegExp(`^${COMPANY_PREFIX}-`),
+        employeeId: new RegExp(`^${COMPANY_PREFIX}\\d+$`),
     }).sort({ createdAt: -1 });
 
-    let number = 1;
+    let number = 119; // Default start since WWL118 already exists
     if (lastUser) {
-        const lastId = lastUser.employeeId;
-        const lastNumber = parseInt(lastId.slice(-3));
+        const lastNumber = parseInt(lastUser.employeeId.replace(COMPANY_PREFIX, ""));
         if (!isNaN(lastNumber)) number = lastNumber + 1;
     }
 
-    const paddedNumber = String(number).padStart(3, "0");
-    return `${COMPANY_PREFIX}-${initials}${paddedNumber}`;
+    return `${COMPANY_PREFIX}${number}`;
 };
 
 
@@ -856,6 +843,204 @@ const verifyEmployeeDocument = async (req, res) => {
 
 
 
+// ─────────────────────────────────────────────
+//  UPDATE SHIFT — single employee
+//  PUT /users/:id/shift
+//  body: { shift: { type, startHour, startMinute, endHour, endMinute,
+//                   graceMinutes, halfDayAfterMinutes, label } }
+// ─────────────────────────────────────────────
+const updateEmployeeShift = async (req, res) => {
+    try {
+        const { shift } = req.body;
+        if (!shift) {
+            return res.status(400).json({ success: false, message: "shift object is required" });
+        }
+
+        const ALLOWED = ["type", "startHour", "startMinute", "endHour", "endMinute",
+            "graceMinutes", "halfDayAfterMinutes", "label"];
+
+        // Build the full shift object with defaults so we always write
+        // a complete sub-document — avoids "Cannot create field in null" error
+        // on users whose shift field was never initialised.
+        const shiftDefaults = {
+            type: "default",
+            startHour: 10, startMinute: 0,
+            endHour: 19, endMinute: 0,
+            graceMinutes: 15, halfDayAfterMinutes: 30,
+            label: "",
+        };
+
+        const mergedShift = { ...shiftDefaults };
+        ALLOWED.forEach(k => { if (shift[k] !== undefined) mergedShift[k] = shift[k]; });
+
+        const user = await User.findByIdAndUpdate(
+            req.params.id,
+            { $set: { shift: mergedShift } },   // write whole object, not dotted paths
+            { new: true, runValidators: true }
+        ).select("-password");
+
+        if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+        // ── Helpers ──────────────────────────────────────────────────────────
+        const pad2 = (n) => String(n).padStart(2, "0");
+        const to12h = (h, m) => {
+            const ampm = h >= 12 ? "PM" : "AM";
+            return `${h % 12 || 12}:${pad2(m)} ${ampm}`;
+        };
+
+        const s = user.shift;
+        const startTime = to12h(s.startHour, s.startMinute);
+        const endTime = to12h(s.endHour, s.endMinute);
+        const shiftLabel = s.label || `${startTime} – ${endTime}`;
+        const changedBy = req.user?.name || "HR";
+
+        // Always show times clearly — never append times to a label that
+        // already contains them (preset labels include the time in brackets)
+        const shiftDisplay = `${startTime} – ${endTime}${s.label ? ` (${s.label})` : ""}`;
+
+        // ── Email (fire-and-forget) ──────────────────────────────────────────
+        notifyShiftChanged(user.email, {
+            employeeName: user.name,
+            shiftLabel: shiftDisplay,
+            startTime,
+            endTime,
+            graceMinutes: s.graceMinutes,
+            halfDayAfterMinutes: s.halfDayAfterMinutes,
+            changedBy,
+        }).catch(err => console.error("Shift email error:", err));
+
+        // ── In-app notification ──────────────────────────────────────────────
+        const io = req.app.get("io");
+        if (io) {
+            const { createNotification } = require("./notification.controller");
+            await createNotification(
+                io,
+                user._id,
+                "🕐 Shift Timing Updated",
+                `Your shift has been changed to ${shiftDisplay} by ${changedBy}.`,
+                "system",
+                {
+                    shiftLabel, startTime, endTime,
+                    graceMinutes: s.graceMinutes,
+                    halfDayAfterMinutes: s.halfDayAfterMinutes
+                }
+            );
+        }
+
+        res.status(200).json({ success: true, message: "Shift updated", shift: user.shift, user });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ─────────────────────────────────────────────
+//  BULK UPDATE SHIFT — apply same shift to many / all employees
+//  PUT /users/bulk-shift
+//  body: { employeeIds: ["id1","id2",...] | "all", shift: {...} }
+// ─────────────────────────────────────────────
+const bulkUpdateShift = async (req, res) => {
+    try {
+        const { employeeIds, shift } = req.body;
+        if (!shift) {
+            return res.status(400).json({ success: false, message: "shift object is required" });
+        }
+
+        const ALLOWED = ["type", "startHour", "startMinute", "endHour", "endMinute",
+            "graceMinutes", "halfDayAfterMinutes", "label"];
+
+        const shiftDefaults = {
+            type: "default",
+            startHour: 10, startMinute: 0,
+            endHour: 19, endMinute: 0,
+            graceMinutes: 15, halfDayAfterMinutes: 30,
+            label: "",
+        };
+
+        const mergedShift = { ...shiftDefaults };
+        ALLOWED.forEach(k => { if (shift[k] !== undefined) mergedShift[k] = shift[k]; });
+
+        // Fetch affected users BEFORE updating (need email + name)
+        let filter = {};
+        if (employeeIds === "all") {
+            filter = { role: { $in: ["employee", "tl", "hr", "manager"] } };
+        } else if (Array.isArray(employeeIds) && employeeIds.length > 0) {
+            filter = { _id: { $in: employeeIds } };
+        } else {
+            return res.status(400).json({
+                success: false,
+                message: "employeeIds must be an array of IDs or \"all\"",
+            });
+        }
+
+        // Fetch affected users BEFORE updating — exclude the HR making the change
+        const affectedUsers = await User.find({
+            ...filter,
+            _id: { $ne: req.user._id },
+        }).select("name email").lean();
+
+        const result = await User.updateMany(filter, { $set: { shift: mergedShift } });
+
+        // ── Helpers ──────────────────────────────────────────────────────────
+        const pad2 = (n) => String(n).padStart(2, "0");
+        const to12h = (h, m) => {
+            const ampm = h >= 12 ? "PM" : "AM";
+            return `${h % 12 || 12}:${pad2(m)} ${ampm}`;
+        };
+
+        const startTime = to12h(shift.startHour ?? 10, shift.startMinute ?? 0);
+        const endTime = to12h(shift.endHour ?? 19, shift.endMinute ?? 0);
+        const shiftLabel = shift.label || `${startTime} – ${endTime}`;
+        const changedBy = req.user?.name || "HR";
+
+        const shiftDisplay = `${startTime} – ${endTime}${shift.label ? ` (${shift.label})` : ""}`;
+
+        // ── Notify only the affected employees (fire-and-forget) ─────────────
+        const io = req.app.get("io");
+        const { createNotification } = require("./notification.controller");
+
+        await Promise.allSettled(
+            affectedUsers.map(async (emp) => {
+                // Email
+                notifyShiftChanged(emp.email, {
+                    employeeName: emp.name,
+                    shiftLabel: shiftDisplay,
+                    startTime,
+                    endTime,
+                    graceMinutes: shift.graceMinutes ?? 15,
+                    halfDayAfterMinutes: shift.halfDayAfterMinutes ?? 30,
+                    changedBy,
+                }).catch(err => console.error(`Shift email error for ${emp.email}:`, err));
+
+                // In-app notification
+                if (io) {
+                    await createNotification(
+                        io,
+                        emp._id,
+                        "🕐 Shift Timing Updated",
+                        `Your shift has been changed to ${shiftDisplay} by ${changedBy}.`,
+                        "system",
+                        {
+                            shiftLabel, startTime, endTime,
+                            graceMinutes: shift.graceMinutes ?? 15,
+                            halfDayAfterMinutes: shift.halfDayAfterMinutes ?? 30
+                        }
+                    );
+                }
+            })
+        );
+
+        res.status(200).json({
+            success: true,
+            message: `Shift updated for ${result.modifiedCount} employee(s)`,
+            modifiedCount: result.modifiedCount,
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+
 module.exports = {
     createUserByHR,
     getAllUsers,
@@ -877,4 +1062,6 @@ module.exports = {
     uploadEmployeeDocument,
     getEmployeeDocuments,
     verifyEmployeeDocument,
+    updateEmployeeShift,
+    bulkUpdateShift,
 };

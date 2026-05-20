@@ -110,23 +110,25 @@ const generateCelebrationTemplate = ({
 
                 <!-- LOGO -->
 
-                <div style="
-                    display:inline-block;
-                    background:${t.logoBg};
-                    border-radius:6px;
-                    padding:4px 10px;
-                    margin-bottom:14px;
-                ">
-                    <span style="
-                        font-size:10px;
-                        font-weight:800;
-                        letter-spacing:2px;
-                        color:${t.logoColor};
-                        text-transform:uppercase;
-                    ">
-                        WORLD WEBLOGIC PVT.LTD
-                    </span>
-                </div>
+              <table align="center" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:14px;">
+    <tr>
+        <td style="
+            background:${t.logoBg};
+            border-radius:6px;
+            padding:4px 10px;
+        ">
+            <span style="
+                font-size:10px;
+                font-weight:800;
+                letter-spacing:2px;
+                color:${t.logoColor};
+                text-transform:uppercase;
+            ">
+                WORLD WEBLOGIC PVT.LTD
+            </span>
+        </td>
+    </tr>
+</table>
 
                 <!-- HEADING -->
 
@@ -166,43 +168,46 @@ const generateCelebrationTemplate = ({
 
               <!-- AVATAR -->
 
-<div style="
-    width:75px;
-    height:75px;
-    border-radius:50%;
-    overflow:hidden;
-    background:${t.avatarBg};
-    border:3px solid ${t.accentColor};
-    margin:0 auto 14px;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-">
-
-    ${uploadedImage
+${uploadedImage
             ? `
-                <img
-                    src="${uploadedImage}"
-                    alt="${employee?.name}"
-                    style="
-                        width:100%;
-                        height:100%;
-                        object-fit:cover;
-                    "
-                />
-            `
+        <img
+            src="${uploadedImage}"
+            alt="${employee?.name}"
+            width="81"
+            height="81"
+            style="
+                display:block;
+                width:81px;
+                height:81px;
+                object-fit:cover;
+                border-radius:50%;
+                border:3px solid ${t.accentColor};
+                margin:0 auto 14px;
+            "
+        />
+    `
             : `
-                <span style="
-                    font-size:24px;
-                    font-weight:800;
-                    color:${t.avatarColor};
+        <table align="center" cellpadding="0" cellspacing="0" border="0" style="margin:0 auto 14px;">
+            <tr>
+                <td width="75" height="75" align="center" valign="middle" style="
+                    width:75px;
+                    height:75px;
+                    border-radius:50%;
+                    background:${t.avatarBg};
+                    border:3px solid ${t.accentColor};
+                    text-align:center;
+                    vertical-align:middle;
                 ">
-                    ${initials}
-                </span>
-            `
+                    <span style="
+                        font-size:26px;
+                        font-weight:800;
+                        color:${t.avatarColor};
+                    ">${initials}</span>
+                </td>
+            </tr>
+        </table>
+    `
         }
-
-</div>
 
                 <!-- NAME -->
 

@@ -9,8 +9,8 @@ const isDev = process.env.NODE_ENV !== "production";
 // ─────────────────────────────────────────────
 //  OFFICE CONFIG
 // ─────────────────────────────────────────────
-const OFFICE_LAT = 28.61597;
-const OFFICE_LNG = 77.37919;
+const OFFICE_LAT = 28.615965009689685;
+const OFFICE_LNG = 77.37918363418639;
 const GEOFENCE_RADIUS = 50; // meters
 
 // ─────────────────────────────────────────────
@@ -22,6 +22,44 @@ const LATE_CUTOFF = 10 * 60 + 30;  // 10:30 → after this, half-day (quota NOT 
 const ONTIME_CUTOFF_P2 = 10 * 60 + 5;   // 10:05 → grace period when quota exhausted (Phase 2)
 const MONTHLY_LATE_QUOTA = 3;
 const SHIFT_END_MINUTES = 17 * 60;
+
+
+
+// ── Derive shift config for a user ──────────────────────────────────
+// Returns timing constants derived from the user's shift document.
+// If shift.type === "default" the classic 10–19 + quota rules apply.
+const getShiftConfig = (shift) => {
+    const s = shift || {};
+    const startH = s.startHour ?? 10;
+    const startM = s.startMinute ?? 0;
+    const endH = s.endHour ?? 19;
+    const endM = s.endMinute ?? 0;
+    const grace = s.graceMinutes ?? 15;  // late trigger
+    const halfAt = s.halfDayAfterMinutes ?? 30;  // half-day trigger
+
+    const shiftStart = startH * 60 + startM;
+    const lateTrigger = shiftStart + grace;
+    const halfDayCutoff = shiftStart + halfAt;
+    const shiftEnd = endH * 60 + endM;
+
+    // quota rules only apply to the DEFAULT 10:00–19:00 shift
+    const isDefaultShift =
+        (s.type === "default" || !s.type) &&
+        startH === 10 && startM === 0 &&
+        endH === 19 && endM === 0;
+
+    // Phase-2 grace (quota exhausted): 5 min after shift start
+    const onTimeCutoffP2 = shiftStart + 5;
+
+    return {
+        shiftStart,
+        lateTrigger,
+        halfDayCutoff,
+        shiftEnd,
+        onTimeCutoffP2,
+        isDefaultShift,
+    };
+};
 
 // ─────────────────────────────────────────────
 //  HELPERS
@@ -124,6 +162,18 @@ const punchIn = async (req, res) => {
         const todayString = now.clone().format("YYYY-MM-DD");
 
         // ─────────────────────────────────────────────
+        // OFFICE TIMING CHECK
+        // ─────────────────────────────────────────────
+        const hour = now.hour();
+
+        if (hour < 9 || hour >= 21) {
+            return res.status(400).json({
+                success: false,
+                message: "Punch allowed only between 9 AM to 9 PM",
+            });
+        }
+
+        // ─────────────────────────────────────────────
         // WEEKEND CHECK
         // ─────────────────────────────────────────────
         if (isWeekend(nowDate)) {
@@ -151,18 +201,6 @@ const punchIn = async (req, res) => {
         }
 
         // ─────────────────────────────────────────────
-        // OFFICE TIMING CHECK
-        // ─────────────────────────────────────────────
-        const hour = now.hour();
-
-        if (hour < 9 || hour >= 21) {
-            return res.status(400).json({
-                success: false,
-                message: "Punch allowed only between 9 AM to 9 PM",
-            });
-        }
-
-        // ─────────────────────────────────────────────
         // LEAVE CHECK
         // ─────────────────────────────────────────────
         const leave = await Leave.findOne({
@@ -182,7 +220,7 @@ const punchIn = async (req, res) => {
         // ─────────────────────────────────────────────
         // GEOFENCE CHECK
         // ─────────────────────────────────────────────
-        if (!isOfflinePunch && !isDev) {
+        if (!isOfflinePunch) {
 
             if (lat === undefined || lat === null || lng === undefined || lng === null) {
                 return res.status(400).json({
@@ -259,7 +297,7 @@ const punchIn = async (req, res) => {
 
                 await broadcastNotification(
                     io,
-                    ["hr"],
+                    ["hr", "manager"],
                     "⚠️ Device Changed",
                     `${req.user.name} used a new device for attendance`,
                     "security",
@@ -276,61 +314,55 @@ const punchIn = async (req, res) => {
         // LATE / HALF DAY LOGIC
         // ─────────────────────────────────────────────
 
+        // ── Load user's shift config ──────────────────────────────────
+        const userDoc = await User.findById(userId).select("shift").lean();
+        const sc = getShiftConfig(userDoc?.shift);
+
         const monthStart = now.clone().startOf("month").toDate();
         const monthEnd = now.clone().endOf("month").toDate();
 
         const lateCount = await Attendance.countDocuments({
             user: userId,
-            date: {
-                $gte: monthStart,
-                $lte: monthEnd,
-            },
+            date: { $gte: monthStart, $lte: monthEnd },
             isLate: true,
         });
 
-        const totalMinutes =
-            (now.hour() * 60) + now.minute();
+        const totalMinutes = now.hour() * 60 + now.minute();
 
         let isLate = false;
         let isHalfDay = false;
         let status = "present";
 
-        if (lateCount < MONTHLY_LATE_QUOTA) {
-
-            // Phase 1
-
-            if (totalMinutes <= LATE_TRIGGER) {
-
-                isLate = false;
-                isHalfDay = false;
-                status = "present";
-
-            } else if (totalMinutes <= LATE_CUTOFF) {
-
-                isLate = true;
-                isHalfDay = false;
-                status = "present";
-
+        if (sc.isDefaultShift) {
+            // ── DEFAULT 10:00–19:00 shift: full 3-quota logic ──────────
+            if (lateCount < MONTHLY_LATE_QUOTA) {
+                // Phase 1
+                if (totalMinutes <= sc.lateTrigger) {
+                    // on time
+                } else if (totalMinutes <= sc.halfDayCutoff) {
+                    isLate = true;
+                    status = "present";
+                } else {
+                    isHalfDay = true;
+                    status = "half-day";
+                }
             } else {
-
-                isLate = false;
-                isHalfDay = true;
-                status = "half-day";
+                // Phase 2 — quota exhausted
+                if (totalMinutes <= sc.onTimeCutoffP2) {
+                    // on time (within 5-min grace)
+                } else {
+                    isHalfDay = true;
+                    status = "half-day";
+                }
             }
-
         } else {
-
-            // Phase 2
-
-            if (totalMinutes <= ONTIME_CUTOFF_P2) {
-
-                isLate = false;
-                isHalfDay = false;
+            // ── CUSTOM shift: simple late / half-day, NO quota ──────────
+            if (totalMinutes <= sc.lateTrigger) {
+                // on time
+            } else if (totalMinutes <= sc.halfDayCutoff) {
+                isLate = true;
                 status = "present";
-
             } else {
-
-                isLate = false;
                 isHalfDay = true;
                 status = "half-day";
             }
@@ -345,11 +377,8 @@ const punchIn = async (req, res) => {
             .second(0);
 
         const lateMinutes =
-            (isLate || isHalfDay)
-                ? Math.max(
-                    0,
-                    now.diff(shiftStart, "minutes")
-                )
+            isLate
+                ? Math.max(0, now.diff(shiftStart, "minutes"))
                 : 0;
 
         // ─────────────────────────────────────────────
@@ -399,6 +428,7 @@ const punchIn = async (req, res) => {
         // ─────────────────────────────────────────────
         if (isHalfDay || isLate) {
             User.findById(userId).select("email name").then(employee => {
+                if (!employee) return;
                 sendMail({
                     to: employee.email,
                     subject: isHalfDay
@@ -673,51 +703,39 @@ const punchOut = async (req, res) => {
             .minute(0)
             .second(0);
 
-        const overtime = parseFloat(
-            Math.max(
-                0,
-                now.diff(shiftEnd, "minutes")
-            ).toFixed(2)
-        );
+        const overtimeMinutes = Math.max(0, now.diff(shiftEnd, "minutes"));
+        const overtime = parseFloat((overtimeMinutes / 60).toFixed(2));
 
         // ─────────────────────────────────────────────
         // HALF DAY LOGIC
         // ─────────────────────────────────────────────
 
-        const punchOutMinutes =
-            (now.hour() * 60) + now.minute();
+        const punchOutMinutes = now.hour() * 60 + now.minute();
 
-        const alreadyHalfDay =
-            attendance.isHalfDay;
+        // Load shift config for punch-out half-day check
+        const userDocOut = await User.findById(userId).select("shift").lean();
+        const scOut = getShiftConfig(userDocOut?.shift);
+
+        const alreadyHalfDay = attendance.isHalfDay;
 
         let halfDayReason = "";
 
-        // Rule 1:
-        // Early punch out before shift end
-        if (
-            !alreadyHalfDay &&
-            punchOutMinutes < SHIFT_END_MINUTES
-        ) {
+        if (!alreadyHalfDay) {
+            const earlyExit = punchOutMinutes < scOut.shiftEnd;
+            const shortHours = workHours < MIN_WORK_HOURS;
 
-            attendance.isHalfDay = true;
-            attendance.status = "half-day";
+            if (earlyExit || shortHours) {
+                attendance.isHalfDay = true;
+                attendance.status = "half-day";
 
-            halfDayReason =
-                "Early punch out before shift end";
-        }
-
-        // Rule 2:
-        // Less than minimum work hours
-        if (
-            !attendance.isHalfDay &&
-            workHours < MIN_WORK_HOURS
-        ) {
-
-            attendance.isHalfDay = true;
-            attendance.status = "half-day";
-
-            halfDayReason =
-                `Worked only ${workHours} hours`;
+                if (earlyExit && shortHours) {
+                    halfDayReason = `Early exit at ${formatTime(nowDate)} and worked only ${workHours} hrs`;
+                } else if (earlyExit) {
+                    halfDayReason = `Early punch out before shift end (${workHours} hrs worked)`;
+                } else {
+                    halfDayReason = `Worked only ${workHours} hrs (minimum ${MIN_WORK_HOURS} hrs required)`;
+                }
+            }
         }
 
         // ─────────────────────────────────────────────
@@ -726,6 +744,7 @@ const punchOut = async (req, res) => {
         if (attendance.isHalfDay && !alreadyHalfDay) {
             // ✅ Fire and forget — don't block the punch-out response
             User.findById(userId).select("email name").then(employee => {
+                if (!employee) return;
                 sendMail({
                     to: employee.email,
                     subject: "⚠️ Half Day Marked",
@@ -752,10 +771,9 @@ const punchOut = async (req, res) => {
         attendance.isOfflinePunch =
             !!isOfflinePunch;
 
-        attendance.syncedAt =
-            isOfflinePunch
-                ? serverNow.toDate()
-                : null;
+        if (isOfflinePunch) {
+            attendance.syncedAt = serverNow.toDate();
+        }
 
         await attendance.save();
 
@@ -781,7 +799,7 @@ const punchOut = async (req, res) => {
 
         const overtimeLabel =
             overtime > 0
-                ? ` · OT: ${Math.floor(overtime / 60)}h ${Math.round(overtime % 60)}m`
+                ? ` · OT: ${Math.floor(overtime)}h ${Math.round((overtime % 1) * 60)}m`
                 : "";
 
         const halfDayLabel =

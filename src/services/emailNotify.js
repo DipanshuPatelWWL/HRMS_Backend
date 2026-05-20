@@ -15,7 +15,6 @@ const template = (content) => `
 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden;">
     <div style="background: #1a237e; padding: 20px; text-align: center;">
         <h2 style="color: white; margin: 0;">World WebLogic Pvt Ltd</h2>
-        <p style="color: #90caf9; margin: 4px 0 0;">HR Management System</p>
     </div>
     <div style="padding: 24px;">
         ${content}
@@ -253,6 +252,101 @@ const notifyHoliday = async (to, { name, date, markedBy }) => {
     return await sendMail({ to, subject: `Holiday: ${name} — ${fmtDate(date)}`, html });
 };
 
+
+// ─── SHIFT CHANGED ────────────────────────────────────────────
+const notifyShiftChanged = async (to, { employeeName, shiftLabel, startTime, endTime, graceMinutes, halfDayAfterMinutes, changedBy }) => {
+    const html = template(`
+        <!-- Header -->
+        <div style="text-align:center;margin-bottom:28px;">
+            <div style="width:56px;height:56px;background:#e8eaf6;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:26px;margin-bottom:12px;">🕐</div>
+            <h2 style="margin:0;font-size:22px;font-weight:700;color:#0f172a;">Shift Timing Updated</h2>
+            <p style="margin:6px 0 0;font-size:14px;color:#64748b;">Your shift schedule has been changed by HR.</p>
+        </div>
+
+        <p style="font-size:15px;color:#334155;line-height:1.7;margin:0 0 20px;">
+            Hi <strong style="color:#0f172a;">${employeeName}</strong>, your shift timing has been updated. Please find the new details below.
+        </p>
+
+        <!-- Shift Details Box -->
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;margin:0 0 24px;">
+            <div style="background:#e8eaf6;padding:10px 18px;border-bottom:1px solid #e2e8f0;">
+                <p style="margin:0;font-size:11px;font-weight:700;color:#3949ab;text-transform:uppercase;letter-spacing:0.8px;">📋 New Shift Details</p>
+            </div>
+
+            <div style="display:flex;align-items:center;padding:14px 18px;border-bottom:1px solid #f1f5f9;">
+                <div style="width:36px;height:36px;background:#e8eaf6;border-radius:8px;display:inline-block;text-align:center;line-height:36px;font-size:16px;flex-shrink:0;">🏷️</div>
+                <div style="margin-left:14px;">
+                    <p style="margin:0;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;">Shift Name</p>
+                    <p style="margin:2px 0 0;font-size:14px;font-weight:600;color:#0f172a;">${shiftLabel || "Custom Shift"}</p>
+                </div>
+            </div>
+
+            <div style="display:flex;align-items:center;padding:14px 18px;border-bottom:1px solid #f1f5f9;">
+                <div style="width:36px;height:36px;background:#e8eaf6;border-radius:8px;display:inline-block;text-align:center;line-height:36px;font-size:16px;flex-shrink:0;">🌅</div>
+                <div style="margin-left:14px;">
+                    <p style="margin:0;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;">Shift Start</p>
+                    <p style="margin:2px 0 0;font-size:14px;font-weight:600;color:#0f172a;">${startTime}</p>
+                </div>
+            </div>
+
+            <div style="display:flex;align-items:center;padding:14px 18px;border-bottom:1px solid #f1f5f9;">
+                <div style="width:36px;height:36px;background:#e8eaf6;border-radius:8px;display:inline-block;text-align:center;line-height:36px;font-size:16px;flex-shrink:0;">🌆</div>
+                <div style="margin-left:14px;">
+                    <p style="margin:0;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;">Shift End</p>
+                    <p style="margin:2px 0 0;font-size:14px;font-weight:600;color:#0f172a;">${endTime}</p>
+                </div>
+            </div>
+
+            <div style="display:flex;align-items:center;padding:14px 18px;border-bottom:1px solid #f1f5f9;">
+                <div style="width:36px;height:36px;background:#e8eaf6;border-radius:8px;display:inline-block;text-align:center;line-height:36px;font-size:16px;flex-shrink:0;">⏱️</div>
+                <div style="margin-left:14px;">
+                    <p style="margin:0;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;">Late Grace Window</p>
+                    <p style="margin:2px 0 0;font-size:14px;font-weight:600;color:#0f172a;">${graceMinutes} minutes after shift start</p>
+                </div>
+            </div>
+
+            <div style="display:flex;align-items:center;padding:14px 18px;border-bottom:1px solid #f1f5f9;">
+                <div style="width:36px;height:36px;background:#e8eaf6;border-radius:8px;display:inline-block;text-align:center;line-height:36px;font-size:16px;flex-shrink:0;">📊</div>
+                <div style="margin-left:14px;">
+                    <p style="margin:0;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;">Half-Day Threshold</p>
+                    <p style="margin:2px 0 0;font-size:14px;font-weight:600;color:#0f172a;">${halfDayAfterMinutes} minutes after shift start</p>
+                </div>
+            </div>
+
+            <div style="display:flex;align-items:center;padding:14px 18px;">
+                <div style="width:36px;height:36px;background:#e8eaf6;border-radius:8px;display:inline-block;text-align:center;line-height:36px;font-size:16px;flex-shrink:0;">👤</div>
+                <div style="margin-left:14px;">
+                    <p style="margin:0;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;">Updated By</p>
+                    <p style="margin:2px 0 0;font-size:14px;font-weight:600;color:#0f172a;">${changedBy || "HR"}</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Login Button -->
+        <div style="text-align:center;margin:0 0 24px;">
+            <a href="https://wwlhrms.digitalwebguider.com"
+               style="display:inline-block;background:#1a237e;color:#ffffff;font-size:15px;font-weight:600;padding:13px 36px;border-radius:8px;text-decoration:none;letter-spacing:0.3px;">
+                View in HRMS →
+            </a>
+        </div>
+
+        <!-- Note -->
+        <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:12px 16px;display:flex;align-items:flex-start;gap:10px;">
+            <span style="font-size:16px;line-height:1.4;flex-shrink:0;">ℹ️</span>
+            <p style="margin:0;font-size:13px;color:#0c4a6e;line-height:1.6;">
+                This change is effective immediately. Please ensure you adjust your schedule accordingly.
+                Contact HR if you have any questions.
+            </p>
+        </div>
+    `);
+
+    return await sendMail({
+        to,
+        subject: `Your Shift Timing Has Been Updated — ${shiftLabel || "New Shift"}`,
+        html,
+    });
+};
+
 module.exports = {
     notifyWelcome,
     notifyPayrollGenerated,
@@ -262,5 +356,6 @@ module.exports = {
     notifyLeaveRejected,
     notifyAnnouncement,
     notifyNewEmployee,
-    notifyHoliday
+    notifyHoliday,
+    notifyShiftChanged,
 };

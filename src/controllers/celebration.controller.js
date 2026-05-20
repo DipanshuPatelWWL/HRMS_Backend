@@ -37,16 +37,21 @@ const createCelebration = async (req, res) => {
             });
         }
 
+        // Strip the employee from recipients to prevent duplicate emails
+        const cleanedRecipients = Array.isArray(recipients)
+            ? recipients.filter(r => r?.toString() !== employeeId?.toString())
+            : [];
+
         const celebrationData = {
             employeeId,
             eventType,
             sendToEmployee,
             sendToOthers,
-            recipients,
+            recipients: cleanedRecipients,
             customMessage,
             uploadedImage,
             scheduledAt,
-            templateStyle: templateStyle || "",
+            templateStyle: templateStyle || "dark_purple",
         };
 
         // Only attach templateId if it's a valid non-empty value
@@ -198,6 +203,13 @@ const updateCelebration = async (req, res) => {
         // If templateId is empty string, remove it from update to avoid cast error
         if (updates.templateId === "" || updates.templateId === null) {
             delete updates.templateId;
+        }
+
+        // Strip the employee from recipients to prevent duplicate emails
+        if (Array.isArray(updates.recipients) && updates.employeeId) {
+            updates.recipients = updates.recipients.filter(
+                r => r?.toString() !== updates.employeeId?.toString()
+            );
         }
 
         const celebration = await Celebration.findByIdAndUpdate(
