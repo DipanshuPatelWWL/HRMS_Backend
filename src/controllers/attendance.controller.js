@@ -2,7 +2,7 @@ const Attendance = require("../models/attendance.model");
 const User = require("../models/user.model");
 const Holiday = require("../models/holiday.model");
 const Leave = require("../models/leave.model");
-const { createNotification, broadcastNotification } = require("./notification.controller");
+const { createNotification } = require("./notification.controller");
 const { sendMail } = require("../services/emailClient");
 const moment = require("moment-timezone");
 const isDev = process.env.NODE_ENV !== "production";
@@ -22,6 +22,9 @@ const LATE_CUTOFF = 10 * 60 + 30;  // 10:30 → after this, half-day (quota NOT 
 const ONTIME_CUTOFF_P2 = 10 * 60 + 5;   // 10:05 → grace period when quota exhausted (Phase 2)
 const MONTHLY_LATE_QUOTA = 3;
 const SHIFT_END_MINUTES = 17 * 60;
+
+const formatTime = (date) =>
+    moment(date).tz("Asia/Kolkata").format("hh:mm a");
 
 
 
@@ -80,13 +83,6 @@ const getDistance = (lat1, lng1, lat2, lng2) => {
         Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
-
-const formatTime = (date) =>
-    new Date(date).toLocaleTimeString("en-IN", {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: true,
-    });
 
 
 // ─────────────────────────────────────────────
@@ -465,16 +461,12 @@ const punchIn = async (req, res) => {
             statusLabel = `⏰ Late (+${lateMinutes}m)`;
         }
 
-        await broadcastNotification(
+        await createNotification(
             io,
-            ["hr", "manager"],
-
+            userId,
             `${employeeName} Punched In`,
-
             `Punched in at ${punchTime} — ${statusLabel}`,
-
             "attendance",
-
             {
                 userId,
                 attendanceId: attendance._id,
@@ -483,32 +475,6 @@ const punchIn = async (req, res) => {
                 isHalfDay,
             }
         );
-
-        // TL Notification
-        const employeeDoc = await User
-            .findById(userId)
-            .select("reportingTo")
-            .lean();
-
-        if (employeeDoc?.reportingTo) {
-
-            await createNotification(
-                io,
-                employeeDoc.reportingTo,
-
-                `${employeeName} Punched In`,
-
-                `Punched in at ${punchTime} — ${statusLabel}`,
-
-                "attendance",
-
-                {
-                    userId,
-                    attendanceId: attendance._id,
-                    status,
-                }
-            );
-        }
 
         // ─────────────────────────────────────────────
         // SUCCESS RESPONSE
@@ -807,17 +773,13 @@ const punchOut = async (req, res) => {
                 ? ` · ⚠️ Half Day`
                 : "";
 
-        await broadcastNotification(
+        // ONE record for the employee — HR/TL see it automatically
+        await createNotification(
             io,
-
-            ["hr", "manager"],
-
+            userId,
             `${employeeName} Punched Out`,
-
             `Punched out at ${punchTime} — ${workLabel}${overtimeLabel}${halfDayLabel}`,
-
             "attendance",
-
             {
                 userId,
                 attendanceId: attendance._id,
@@ -826,33 +788,6 @@ const punchOut = async (req, res) => {
                 isHalfDay: attendance.isHalfDay,
             }
         );
-
-        // TL Notification
-        const employeeDoc = await User
-            .findById(userId)
-            .select("reportingTo")
-            .lean();
-
-        if (employeeDoc?.reportingTo) {
-
-            await createNotification(
-                io,
-
-                employeeDoc.reportingTo,
-
-                `${employeeName} Punched Out`,
-
-                `Punched out at ${punchTime} — ${workLabel}${overtimeLabel}${halfDayLabel}`,
-
-                "attendance",
-
-                {
-                    userId,
-                    attendanceId: attendance._id,
-                    workHours,
-                }
-            );
-        }
 
         // ─────────────────────────────────────────────
         // SUCCESS RESPONSE
@@ -933,10 +868,15 @@ const getMonthlyAttendance = async (req, res) => {
         }
 
         // ✅ Get user joining date
-        const user = await User.findById(req.user._id).select("joiningDate");
+        const user = await User.findById(req.user._id).select("joiningDate createdAt");
 
-        const joiningDate = user?.joiningDate
-            ? new Date(new Date(user.joiningDate).setHours(0, 0, 0, 0))
+        const rawJoining = user?.joiningDate ? new Date(user.joiningDate) : null;
+        const rawCreated = user?.createdAt ? new Date(user.createdAt) : null;
+        const effectiveStart = rawJoining && rawCreated
+            ? new Date(Math.max(rawJoining.getTime(), rawCreated.getTime()))
+            : rawJoining || rawCreated || null;
+        const joiningDate = effectiveStart
+            ? new Date(new Date(effectiveStart).setHours(0, 0, 0, 0))
             : null;
 
         const start = moment.tz(`${year}-${String(month).padStart(2, '0')}-01`, "Asia/Kolkata").startOf("month").toDate();

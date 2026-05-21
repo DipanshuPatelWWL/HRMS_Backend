@@ -82,6 +82,11 @@ const createUserByHR = async (req, res) => {
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
 
+        // Parse joining date at noon IST to avoid UTC day-shift
+        const parsedJoiningDate = req.body.joiningDate
+            ? new Date(req.body.joiningDate + "T12:00:00+05:30")
+            : new Date();
+
         const user = await User.create({
             name,
             email,
@@ -91,11 +96,11 @@ const createUserByHR = async (req, res) => {
             role: role || "employee",
             department: department || null,
             designation: designation || "",
+            joiningDate: parsedJoiningDate,
             salary: {
                 monthly: monthlySalary || 0,
                 perDay: 0,
             },
-            // ── Save reportingTo only if provided and valid ──
             ...(reportingTo ? { reportingTo } : {}),
         });
 
@@ -236,9 +241,22 @@ const updateUser = async (req, res) => {
     try {
         const updates = req.body;
 
+        // Flatten salary into dot-notation so nested fields
+        // don't overwrite unrelated salary sub-fields
+        const flatUpdates = { ...updates };
+        if (updates.salary && typeof updates.salary === "object") {
+            delete flatUpdates.salary;
+            if (updates.salary.monthly !== undefined) {
+                flatUpdates["salary.monthly"] = updates.salary.monthly;
+            }
+            if (updates.salary.perDay !== undefined) {
+                flatUpdates["salary.perDay"] = updates.salary.perDay;
+            }
+        }
+
         const user = await User.findByIdAndUpdate(
             req.params.id,
-            updates,
+            { $set: flatUpdates },
             { new: true, runValidators: true }
         ).select("-password");
 
@@ -252,7 +270,6 @@ const updateUser = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 
 // ─────────────────────────────────────────────
 //  DELETE USER (HR)
@@ -1039,6 +1056,34 @@ const bulkUpdateShift = async (req, res) => {
     }
 };
 
+const getLeaveBalance = async (req, res) => {
+    try {
+        const user = await User.findById(req.params.id)
+            .select("name employeeId leaveBalance");
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: "User not found"
+            });
+        }
+
+        res.json({
+            success: true,
+            leaveBalance: user.leaveBalance || {
+                casual: { total: 12, used: 0 },
+                sick: { total: 6, used: 0 },
+                earned: { total: 0, used: 0 },
+            },
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+}
+
 
 
 module.exports = {
@@ -1064,4 +1109,5 @@ module.exports = {
     verifyEmployeeDocument,
     updateEmployeeShift,
     bulkUpdateShift,
+    getLeaveBalance
 };

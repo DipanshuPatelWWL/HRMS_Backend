@@ -16,7 +16,7 @@ router.get(
 router.put(
     "/salary-access/:id",
     protect,
-    allowRoles("hr", "manager", "manager"),
+    allowRoles("hr", "manager", "superadmin"),
     updateSalaryAccess
 );
 

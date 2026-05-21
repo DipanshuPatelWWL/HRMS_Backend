@@ -4,6 +4,7 @@ const Attendance = require("../models/attendance.model");
 const Holiday = require("../models/holiday.model");
 const Leave = require("../models/leave.model");
 const { createNotification } = require("./notification.controller");
+const { calculateSalary } = require("../utils/salary/salaryEngine");
 
 // ─────────────────────────────────────────────
 //  HELPER
@@ -41,215 +42,7 @@ const isWeekend = (date) => {
 // ─────────────────────────────────────────────
 
 
-const buildSalaryData = async (userId, month, year) => {
-    const user = await User.findById(userId);
-    if (!user || !user.salary?.monthly) return null;
 
-    const monthlySalary = user.salary.monthly;
-    const start = new Date(year, month - 1, 1);
-    const end = new Date(year, month, 0, 23, 59, 59, 999);
-    const totalCalendarDays = new Date(year, month, 0).getDate();
-
-    // ── Holidays ──────────────────────────────────────────
-    const holidays = await Holiday.find({ date: { $gte: start, $lte: end } });
-    const holidaySet = new Set(
-        holidays.map(h => {
-            const d = new Date(h.date);
-            d.setHours(0, 0, 0, 0);
-            return d.getTime();
-        })
-    );
-    const holidayCount = holidays.length;
-
-    // ── Weekends ──────────────────────────────────────────
-    let totalWeekends = 0;
-    for (let d = 1; d <= totalCalendarDays; d++) {
-        if (isWeekend(new Date(year, month - 1, d))) totalWeekends++;
-    }
-
-    // ── Working days = Mon–Fri minus holidays ─────────────
-    // This is what the employee is EXPECTED to work
-    let totalWorkingDays = 0;
-    for (let d = 1; d <= totalCalendarDays; d++) {
-        const cur = new Date(year, month - 1, d);
-        cur.setHours(0, 0, 0, 0);
-        if (!isWeekend(cur) && !holidaySet.has(cur.getTime())) {
-            totalWorkingDays++;
-        }
-    }
-
-    if (totalCalendarDays === 0) return null; // safety guard
-
-    // ── Salary Structure ──────────────────────────────────
-    const structure = user.salary?.structure || {};
-    const deductionCfg = user.salary?.deductions || {};
-
-    const COMPONENT_DEFAULTS = {
-        basic: { enabled: true, percent: 40 },
-        hra: { enabled: true, percent: 20 },
-        specialAllowance: { enabled: true, percent: 25 },
-        conveyance: { enabled: true, percent: 10 },
-        otherAllowance: { enabled: true, percent: 5 },
-    };
-
-    const COMPONENT_LABELS = {
-        basic: "Basic Salary",
-        hra: "HRA",
-        specialAllowance: "Special Allowance",
-        conveyance: "Conveyance / Internet",
-        otherAllowance: "Other Allowance",
-    };
-
-    // Build component amounts
-    const salaryStructureSnapshot = {};
-    for (const key of Object.keys(COMPONENT_DEFAULTS)) {
-        const cfg = structure[key] || COMPONENT_DEFAULTS[key];
-        const enabled = cfg.enabled ?? COMPONENT_DEFAULTS[key].enabled;
-        const percent = cfg.percent ?? COMPONENT_DEFAULTS[key].percent;
-        const amount = enabled ? round2((percent / 100) * monthlySalary) : 0;
-        salaryStructureSnapshot[key] = { enabled, percent, amount, label: COMPONENT_LABELS[key] };
-    }
-
-    const grossEarnings = round2(
-        Object.values(salaryStructureSnapshot).reduce((s, c) => s + c.amount, 0)
-    );
-    const basicAmt = salaryStructureSnapshot.basic.amount;
-
-    // ── Statutory Deductions ──────────────────────────────
-    const pfEnabled = deductionCfg.pf?.enabled ?? false;
-    const esiEnabled = deductionCfg.esi?.enabled ?? false;
-    const ptEnabled = deductionCfg.professionalTax?.enabled ?? false;
-
-    const pfPercent = deductionCfg.pf?.percent ?? 12;
-    const esiPercent = deductionCfg.esi?.percent ?? 0.75;
-    const ptFixed = deductionCfg.professionalTax?.fixedAmount ?? 0;
-
-    const pfNumber = deductionCfg.pf?.pfNumber || "";
-    const esiNumber = deductionCfg.esi?.esiNumber || "";
-
-    const pfAmount = pfEnabled ? round2((pfPercent / 100) * basicAmt) : 0;
-    const esiAmount = esiEnabled ? round2((esiPercent / 100) * grossEarnings) : 0;
-    const ptAmount = ptEnabled ? round2(ptFixed) : 0;
-
-    const statutoryDeductionsSnapshot = {
-        pf: { enabled: pfEnabled, percent: pfPercent, amount: pfAmount, label: "Provident Fund (PF)", pfNumber },
-        esi: { enabled: esiEnabled, percent: esiPercent, amount: esiAmount, label: "ESI", esiNumber },
-        professionalTax: { enabled: ptEnabled, fixedAmount: ptFixed, amount: ptAmount, label: "Professional Tax" },
-    };
-    const totalStatutoryDeductions = round2(pfAmount + esiAmount + ptAmount);
-
-    // ── Per-day rate ──────────────────────────────────────
-    // perDay based on gross monthly divided by calendar days
-    const perDay = round2(monthlySalary / totalCalendarDays);
-    const halfDayPay = round2(perDay / 2);
-
-    // ── Approved leaves this month ────────────────────────
-    const leaves = await Leave.find({
-        user: userId,
-        status: "approved",
-        fromDate: { $lte: end },
-        toDate: { $gte: start },
-    });
-
-    // Build set of leave working-day timestamps (to exclude from absent calculation)
-    const leaveDaySet = new Set();
-    leaves.forEach(l => {
-        const from = new Date(l.fromDate);
-        const to = new Date(l.toDate);
-        for (let d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) {
-            const day = new Date(d);
-            day.setHours(0, 0, 0, 0);
-            if (
-                day >= start &&
-                day <= end &&
-                !isWeekend(day) &&
-                !holidaySet.has(day.getTime())
-            ) {
-                leaveDaySet.add(day.getTime());
-            }
-        }
-    });
-
-    let paidLeave = 0;
-    let unpaidLeave = 0;
-
-    leaves.forEach(l => {
-        if (l.type === "casual") {
-            paidLeave += l.paidDays || 0;
-            unpaidLeave += l.unpaidDays || 0;
-        } else {
-            unpaidLeave += l.totalDays || 0;
-        }
-    });
-
-    // ── Attendance records ────────────────────────────────
-    const records = await Attendance.find({
-        user: userId,
-        date: { $gte: start, $lte: end },
-    });
-
-    let present = 0;  // full present days (NOT including half-day records)
-    let halfDays = 0;  // half-day records
-
-    records.forEach(a => {
-        const d = new Date(a.date);
-        d.setHours(0, 0, 0, 0);
-
-        // Skip weekends — no deduction, no earning needed
-        if (isWeekend(d)) return;
-
-        // Skip holidays — no deduction, no earning needed
-        if (holidaySet.has(d.getTime())) return;
-
-        // Skip leave days — already counted via paidLeave/unpaidLeave
-        if (leaveDaySet.has(d.getTime())) return;
-
-        if (a.isHalfDay) {
-            halfDays++;
-        } else if (a.status === "present") {
-            present++;
-        }
-    });
-
-    // ── Absent days ───────────────────────────────────────
-
-    const coveredSlots = present + (halfDays * 0.5) + leaveDaySet.size;
-    const absentDays = Math.max(0, totalWorkingDays - coveredSlots);
-
-    // ── Attendance Deductions ─────────────────────────────
-    const absentAmt = round2(absentDays * perDay);
-    const halfDayDeduct = round2(halfDays * halfDayPay);
-    const unpaidLeaveAmt = round2(unpaidLeave * perDay);
-    const totalAttendanceDeductions = round2(absentAmt + halfDayDeduct + unpaidLeaveAmt);
-
-    // ── Total Deductions & Net ────────────────────────────
-    const totalDeductions = round2(totalAttendanceDeductions + totalStatutoryDeductions);
-    const netSalary = round2(Math.max(0, monthlySalary - totalDeductions));
-
-    return {
-        monthlySalary,
-        grossEarnings,
-        perDaySalary: perDay,
-        halfDaySalary: halfDayPay,
-        salaryStructure: salaryStructureSnapshot,
-        statutoryDeductions: statutoryDeductionsSnapshot,
-        totalStatutoryDeductions,
-        presentDays: present,
-        halfDays,
-        absentDays,
-        paidLeave,
-        unpaidLeave,
-        holidays: holidayCount,
-        weekends: totalWeekends,
-        totalWorkingDays,
-        totalCalendarDays,
-        absentAmt,
-        halfDayDeduct,
-        unpaidLeaveAmt,
-        deductions: totalDeductions,
-        netSalary,
-    };
-};
 
 function round2(n) {
     return Math.round(n * 100) / 100;
@@ -295,7 +88,7 @@ const generatePayroll = async (req, res) => {
                     continue;
                 }
 
-                const data = await buildSalaryData(user._id, m, y);
+                const data = await calculateSalary(user._id, m, y);
                 if (!data) {
                     skipped.push({ name: user.name, reason: "No salary configured" });
                     continue;
@@ -306,6 +99,8 @@ const generatePayroll = async (req, res) => {
                     month: m,
                     year: y,
                     generatedBy: req.user._id,
+                    status: "draft",
+                    isReleased: false,
                     ...data,
                 });
 

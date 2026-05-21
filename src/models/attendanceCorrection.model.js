@@ -42,7 +42,7 @@ const correctionSchema = new mongoose.Schema(
         // ── Decision ──────────────────────────────────────────────────
         status: {
             type: String,
-            enum: ["pending", "approved", "rejected"],
+            enum: ["pending", "approved", "rejected", "cancelled", "revoked"],
             default: "pending",
             index: true,
         },

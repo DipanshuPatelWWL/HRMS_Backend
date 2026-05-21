@@ -3,6 +3,7 @@ const User = require("../models/user.model");
 
 /* ─── Map type → socket event name ──────────────────────────────────────── */
 const TYPE_TO_EVENT = {
+    attendance: "attendancePunch",
     announcement: "newAnnouncement",
     leave_applied: "leaveApplied",
     leave_approved: "leaveApproved",
@@ -23,7 +24,17 @@ const createNotification = async (
     type = "general",
     meta = {}
 ) => {
-    /* 1. Save to DB */
+    /* 1. Dedup — skip if identical notification created in last 10s */
+    const recentDuplicate = await Notification.findOne({
+        user: userId,
+        type,
+        title,
+        createdAt: { $gte: new Date(Date.now() - 10_000) },
+    }).lean();
+
+    if (recentDuplicate) return recentDuplicate;
+
+    /* 2. Save to DB */
     const notification = await Notification.create({
         user: userId,
         title,
@@ -115,6 +126,11 @@ const notifyLeaveApplied = async (io, applicantId, title, message = "", meta = {
     );
 };
 
+
+const notifyAttendance = async (io, employeeId, title, message = "", meta = {}) => {
+    return createNotification(io, employeeId, title, message, "attendance", meta);
+};
+
 /* ─── HTTP route handlers ────────────────────────────────────────────────── */
 
 /* GET /notifications */
@@ -123,16 +139,26 @@ const getMyNotifications = async (req, res) => {
         const { role, _id: userId } = req.user;
 
         if (role === "hr" || role === "manager" || role === "admin") {
-            // HR/Manager see:
-            // 1. ALL their own notifications (any type)
-            // 2. Other users' notifications ONLY if they are NOT type "system"
-            //    (system = personal notifications like shift change, password reset etc.)
+            const SHARED_TYPES = [
+                "leave_applied",
+                "leave_approved",
+                "leave_rejected",
+                "attendance",
+                "announcement",
+                "task_assigned",
+                "task_updated",
+                "task_done",
+                "ticket_replied",
+                "ticket_resolved",
+                "payroll",
+            ];
+
             const data = await Notification.find({
                 $or: [
-                    { user: userId },                   // own — everything
+                    { user: userId },                        // own — everything
                     {
-                        user: { $ne: userId },          // others — exclude personal ones
-                        type: { $ne: "system" },
+                        user: { $ne: userId },
+                        type: { $in: SHARED_TYPES },
                     },
                 ],
             })
@@ -307,6 +333,7 @@ module.exports = {
     createNotification,
     broadcastNotification,
     notifyLeaveApplied,
+    notifyAttendance,
     getMyNotifications,
     getUnreadCount,
     markAsRead,

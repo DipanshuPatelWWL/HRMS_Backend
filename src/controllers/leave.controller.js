@@ -693,7 +693,7 @@ const getLeaveBalance = async (req, res) => {
 // ─────────────────────────────────────────────
 const getEmployeesLeaveBalances = async (req, res) => {
     try {
-        const employees = await User.find({ role: { $in: ["employee", "tl", "manager"] } })
+        const employees = await User.find({ role: { $in: ["employee", "tl"] } })
             .select("name email employeeId role leaveBalance")
             .sort({ name: 1 });
 
@@ -711,16 +711,28 @@ const getEmployeesLeaveBalances = async (req, res) => {
 const updateEmployeeLeaveBalance = async (req, res) => {
     try {
         const { userId } = req.params;
-        const { total } = req.body;
+        const { type, total } = req.body;
+
+        const validTypes = ["casual", "sick", "earned"];
+        if (!type || !validTypes.includes(type)) {
+            return res.status(400).json({
+                success: false,
+                message: "type is required and must be one of: casual, sick, earned",
+            });
+        }
 
         if (total === undefined || isNaN(Number(total)) || Number(total) < 0) {
-            return res.status(400).json({ success: false, message: "Valid total is required" });
+            return res.status(400).json({
+                success: false,
+                message: "Valid total is required",
+            });
         }
 
         const user = await User.findById(userId);
         if (!user) return res.status(404).json({ success: false, message: "Employee not found" });
 
-        user.leaveBalance.total = Number(total);
+        // Only update the selected leave type's total
+        user.leaveBalance[type].total = Number(total);
         await user.save();
 
         const io = req.app.get("io");
@@ -728,14 +740,14 @@ const updateEmployeeLeaveBalance = async (req, res) => {
             io,
             user._id,
             "Leave Balance Updated 📋",
-            `Your leave balance has been updated to ${total} days by HR.`,
-            "general",   // ← was "leave_applied"
+            `Your ${type} leave balance has been updated to ${total} days by HR.`,
+            "general",
             {}
         );
 
         res.status(200).json({
             success: true,
-            message: `Leave balance updated for ${user.name}`,
+            message: `${type} leave balance updated for ${user.name}`,
             leaveBalance: user.leaveBalance,
         });
     } catch (error) {

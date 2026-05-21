@@ -279,9 +279,29 @@ const userSchema = new mongoose.Schema(
         },
 
         leaveBalance: {
-            total: { type: Number, default: 0 },
-            used: { type: Number, default: 0 },
+            casual: {
+                total: { type: Number, default: 12 },
+                used: { type: Number, default: 0 },
+                carryForward: { type: Number, default: 0 },
+            },
+            sick: {
+                total: { type: Number, default: 0 },
+                used: { type: Number, default: 0 },
+                carryForward: { type: Number, default: 0 },
+            },
+            earned: {
+                total: { type: Number, default: 0 },
+                used: { type: Number, default: 0 },
+                carryForward: { type: Number, default: 0 },
+            },
+            lastResetYear: { type: Number, default: () => new Date().getFullYear() },
+            lastResetMonth: { type: Number, default: () => new Date().getMonth() + 1 },
             lastAccrual: { type: Date, default: null },
+        },
+
+        isLegacyEmployee: {
+            type: Boolean,
+            default: false,
         },
     },
     {
@@ -294,10 +314,6 @@ const userSchema = new mongoose.Schema(
 userSchema.methods.toJSON = function () {
     const obj = this.toObject();
     delete obj.password;
-
-    if (this.role === "employee") {
-        delete obj.salary;
-    }
 
     if (!["hr", "manager"].includes(this.role)) {
         delete obj.governmentId;

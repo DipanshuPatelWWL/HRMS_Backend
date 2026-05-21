@@ -50,20 +50,19 @@ router.post(
     generatePayroll
 );
 
+router.put(
+    "/bulk-mark-paid",
+    protect,
+    allowRoles("hr", "manager", "superadmin"),
+    bulkMarkPaid
+);
+
 // Mark single payroll as paid
 router.put(
     "/:id/mark-paid",
     protect,
     allowRoles("hr", "manager", "superadmin"),
     markAsPaid
-);
-
-// Bulk mark as paid
-router.put(
-    "/bulk-mark-paid",
-    protect,
-    allowRoles("hr", "manager", "superadmin"),
-    bulkMarkPaid
 );
 
 // Delete draft payroll

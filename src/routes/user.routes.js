@@ -31,6 +31,7 @@ const {
     verifyEmployeeDocument,
     updateEmployeeShift,
     bulkUpdateShift,
+    getLeaveBalance
 } = require("../controllers/user.controller");
 
 
@@ -161,13 +162,6 @@ router.put(
     updateEmployeeShift
 );
 
-// router.put(
-//     "/bulk-shift",           // must be BEFORE /:id routes
-//     protect,
-//     allowRoles("hr", "manager", "superadmin"),
-//     bulkUpdateShift
-// );
-
 
 
 router.get(
@@ -192,5 +186,13 @@ router.get(
     allowRoles("hr", "manager", "tl", "superadmin"),
     getSingleUser
 );
+
+
+router.get(
+    "/:id/leave-balance",
+    protect,
+    allowRoles("hr", "manager", "tl", "superadmin"),
+    getLeaveBalance
+)
 
 module.exports = router;

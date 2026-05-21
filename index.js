@@ -5,7 +5,7 @@ require("./src/cron/leave.cron");
 const {
     startCelebrationCron
 } = require("./src/cron/celebration.cron");
-const { startLeaveAccrualCron } = require("./src/cron/leave.cron")
+const { startLeaveAccrualCron, accrueMonthlyLeave, runYearlyReset } = require("./src/cron/leave.cron");
 // const { startPersonalIntentSeed } = require("./src/cron/seedCompanyKB")
 
 const PORT = process.env.PORT || 5000;

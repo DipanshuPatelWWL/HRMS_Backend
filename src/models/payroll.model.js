@@ -51,11 +51,18 @@ const payrollSchema = new mongoose.Schema(
         halfDayDeduct: { type: Number, default: 0 },
         unpaidLeaveAmt: { type: Number, default: 0 },
 
-        // ── Earnings / Deductions ────────────────────
-        basicEarnings: { type: Number, default: 0 },
-        halfDayEarnings: { type: Number, default: 0 },
+        // ── Earnings breakdown (from salaryEngine) ───────
+        presentEarning: { type: Number, default: 0 },
+        halfDayEarning: { type: Number, default: 0 },
+        paidLeaveEarning: { type: Number, default: 0 },
+        basicEarnings: { type: Number, default: 0 }, // kept for backward compat
+        halfDayEarnings: { type: Number, default: 0 }, // kept for backward compat
         overtimePay: { type: Number, default: 0 },
-        deductions: { type: Number, default: 0 },  // total attendance deductions
+
+        // ── Deductions breakdown ─────────────────────────
+        totalAttendanceDeductions: { type: Number, default: 0 },
+        deductions: { type: Number, default: 0 }, // total = attendance + statutory
+
         netSalary: { type: Number, required: true },
 
         // ── Status ───────────────────────────────────

@@ -26,6 +26,21 @@ const leaveSchema = new mongoose.Schema(
         reason: { type: String, required: true, trim: true },
         attachment: { type: String, default: "" },
 
+        // ── Medical certificate (optional, Rule 3) ────────
+        medicalCertificate: {
+            uploaded: { type: Boolean, default: false },
+            fileUrl: { type: String, default: "" },
+            fileName: { type: String, default: "" },
+            uploadedAt: { type: Date, default: null },
+        },
+
+        // ── Approval metadata ─────────────────────────────
+        approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+        approvedAt: { type: Date, default: null },
+        rejectedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+        rejectedAt: { type: Date, default: null },
+        rejectReason: { type: String, default: "" },
+
         // ✅ Paid / unpaid breakdown — stored at approval time
         paidDays: { type: Number, default: 0 },
         unpaidDays: { type: Number, default: 0 },
