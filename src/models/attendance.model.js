@@ -38,6 +38,11 @@ const attendanceSchema = new mongoose.Schema(
             default: 0,
         },
 
+        eightHourPassUsed: {
+            type: Boolean,
+            default: false,
+        },
+
         isLate: {
             type: Boolean,
             default: false,

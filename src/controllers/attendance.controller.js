@@ -22,6 +22,10 @@ const LATE_CUTOFF = 10 * 60 + 30;  // 10:30 → after this, half-day (quota NOT 
 const ONTIME_CUTOFF_P2 = 10 * 60 + 5;   // 10:05 → grace period when quota exhausted (Phase 2)
 const MONTHLY_LATE_QUOTA = 3;
 const SHIFT_END_MINUTES = 17 * 60;
+const MIN_WORK_HOURS = 9;
+const LENIENCY_WORK_HOURS = 8;
+const GRACE_MINUTES_BEFORE_SHIFT_END = 10;
+const MONTHLY_8HR_PASS_LIMIT = 1;
 
 const formatTime = (date) =>
     moment(date).tz("Asia/Kolkata").format("hh:mm a");
@@ -172,7 +176,7 @@ const punchIn = async (req, res) => {
         // ─────────────────────────────────────────────
         // WEEKEND CHECK
         // ─────────────────────────────────────────────
-        if (isWeekend(nowDate)) {
+        if (now.day() === 0 || now.day() === 6) {
             return res.status(400).json({
                 success: false,
                 message: "Office is closed on weekends",
@@ -199,6 +203,7 @@ const punchIn = async (req, res) => {
         // ─────────────────────────────────────────────
         // LEAVE CHECK
         // ─────────────────────────────────────────────
+        // FIX #14: only block full-day leaves; half-day leaves allow punch-in (mark isHalfDay automatically)
         const leave = await Leave.findOne({
             user: userId,
             status: "approved",
@@ -207,10 +212,16 @@ const punchIn = async (req, res) => {
         });
 
         if (leave) {
-            return res.status(400).json({
-                success: false,
-                message: "You are on approved leave",
-            });
+            const isHalfDayLeave = leave.leaveType === "half-day" || leave.halfDay === true;
+            if (!isHalfDayLeave) {
+                return res.status(400).json({
+                    success: false,
+                    message: "You are on approved leave",
+                });
+            }
+            // Half-day leave: allow punch-in but pre-mark isHalfDay
+            // This flag will be picked up below when saving the attendance record
+            req._halfDayLeave = true;
         }
 
         // ─────────────────────────────────────────────
@@ -288,12 +299,11 @@ const punchIn = async (req, res) => {
                 lastAttendance.deviceId &&
                 lastAttendance.deviceId !== deviceId
             ) {
-
                 const io = req.app.get("io");
 
-                await broadcastNotification(
+                await createNotification(
                     io,
-                    ["hr", "manager"],
+                    userId,
                     "⚠️ Device Changed",
                     `${req.user.name} used a new device for attendance`,
                     "security",
@@ -311,7 +321,9 @@ const punchIn = async (req, res) => {
         // ─────────────────────────────────────────────
 
         // ── Load user's shift config ──────────────────────────────────
-        const userDoc = await User.findById(userId).select("shift").lean();
+        const userDoc = await User.findById(userId)
+            .select("shift reportingTo")
+            .lean();
         const sc = getShiftConfig(userDoc?.shift);
 
         const monthStart = now.clone().startOf("month").toDate();
@@ -323,6 +335,8 @@ const punchIn = async (req, res) => {
             isLate: true,
         });
 
+        // FIX #1: removed duplicate `const now = rawNow` re-declaration
+        // `now` is already the correct IST moment from the top of punchIn
         const totalMinutes = now.hour() * 60 + now.minute();
 
         let isLate = false;
@@ -367,9 +381,13 @@ const punchIn = async (req, res) => {
         // ─────────────────────────────────────────────
         // LATE MINUTES
         // ─────────────────────────────────────────────
+        // FIX #3: derive shift start from sc.shiftStart (minutes from midnight) not hardcoded 10:00
+        const shiftStartHour = Math.floor(sc.shiftStart / 60);
+        const shiftStartMinute = sc.shiftStart % 60;
+
         const shiftStart = now.clone()
-            .hour(10)
-            .minute(0)
+            .hour(shiftStartHour)
+            .minute(shiftStartMinute)
             .second(0);
 
         const lateMinutes =
@@ -383,6 +401,10 @@ const punchIn = async (req, res) => {
         let attendance;
 
         try {
+            if (req._halfDayLeave) {
+                isHalfDay = true;
+                status = "half-day";
+            }
 
             attendance = await Attendance.create({
                 user: userId,
@@ -461,20 +483,37 @@ const punchIn = async (req, res) => {
             statusLabel = `⏰ Late (+${lateMinutes}m)`;
         }
 
-        await createNotification(
-            io,
-            userId,
-            `${employeeName} Punched In`,
-            `Punched in at ${punchTime} — ${statusLabel}`,
-            "attendance",
-            {
-                userId,
-                attendanceId: attendance._id,
-                status,
-                isLate,
-                isHalfDay,
+        // ─────────────────────────────────────────────
+        // HR / TL / MANAGER NOTIFICATIONS ONLY
+        // ─────────────────────────────────────────────
+        const notifyUsers = await User.find({
+            $or: [
+                { role: { $in: ["hr", "manager", "admin"] } },
+                { _id: userDoc?.reportingTo }
+            ]
+        }).select("_id");
+
+        for (const notifyUser of notifyUsers) {
+            // Don't send to self
+            if (notifyUser._id.toString() === userId.toString()) {
+                continue;
             }
-        );
+
+            await createNotification(
+                io,
+                notifyUser._id,
+                `${employeeName} Punched In`,
+                `Punched in at ${punchTime} — ${statusLabel}`,
+                "attendance",
+                {
+                    userId,
+                    attendanceId: attendance._id,
+                    status,
+                    isLate,
+                    isHalfDay,
+                }
+            );
+        }
 
         // ─────────────────────────────────────────────
         // SUCCESS RESPONSE
@@ -505,12 +544,6 @@ const punchIn = async (req, res) => {
     }
 };
 
-
-
-
-// Example:
-// 9 hours minimum required
-const MIN_WORK_HOURS = 9;
 
 const punchOut = async (req, res) => {
     try {
@@ -594,7 +627,7 @@ const punchOut = async (req, res) => {
         // ─────────────────────────────────────────────
         // WEEKEND CHECK
         // ─────────────────────────────────────────────
-        if (isWeekend(nowDate)) {
+        if (now.day() === 0 || now.day() === 6) {
             return res.status(400).json({
                 success: false,
                 message: "Office is closed on weekends",
@@ -621,10 +654,19 @@ const punchOut = async (req, res) => {
         // ─────────────────────────────────────────────
         // FIND ATTENDANCE
         // ─────────────────────────────────────────────
-        const attendance = await Attendance.findOne({
+        let attendance = await Attendance.findOne({
             user: userId,
             dateString: todayString,
         });
+
+        if (!attendance) {
+            const yesterdayString = now.clone().subtract(1, "day").format("YYYY-MM-DD");
+            attendance = await Attendance.findOne({
+                user: userId,
+                dateString: yesterdayString,
+                punchOut: null,
+            });
+        }
 
         if (!attendance) {
             return res.status(404).json({
@@ -660,13 +702,26 @@ const punchOut = async (req, res) => {
             ).toFixed(2)
         );
 
+        // FIX #9: declare at function scope so email and all downstream blocks access it safely
+        const roundedWorkHours = parseFloat(workHours.toFixed(2));
+
+        // ─────────────────────────────────────────────
+        // LOAD SHIFT CONFIG  (needed for overtime + half-day)
+        // ─────────────────────────────────────────────
+        const userDocOut = await User.findById(userId).select("shift").lean();
+        const scOut = getShiftConfig(userDocOut?.shift);
+
         // ─────────────────────────────────────────────
         // OVERTIME
         // ─────────────────────────────────────────────
+        // FIX #7: derive shift end from scOut config instead of hardcoded 19:00
+        const shiftEndHour = Math.floor(scOut.shiftEnd / 60);
+        const shiftEndMinute = scOut.shiftEnd % 60;
+
         const shiftEnd = now
             .clone()
-            .hour(19)
-            .minute(0)
+            .hour(shiftEndHour)
+            .minute(shiftEndMinute)
             .second(0);
 
         const overtimeMinutes = Math.max(0, now.diff(shiftEnd, "minutes"));
@@ -675,56 +730,76 @@ const punchOut = async (req, res) => {
         // ─────────────────────────────────────────────
         // HALF DAY LOGIC
         // ─────────────────────────────────────────────
-
-        const punchOutMinutes = now.hour() * 60 + now.minute();
-
-        // Load shift config for punch-out half-day check
-        const userDocOut = await User.findById(userId).select("shift").lean();
-        const scOut = getShiftConfig(userDocOut?.shift);
+        const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+        const rawNowDate = now.toDate();
+        const nowIST = new Date(rawNowDate.getTime() + IST_OFFSET_MS);
+        const punchOutMinutes = nowIST.getUTCHours() * 60 + nowIST.getUTCMinutes();
 
         const alreadyHalfDay = attendance.isHalfDay;
 
+        const earlyExit = punchOutMinutes < scOut.shiftEnd;
+        const shortHours = roundedWorkHours < MIN_WORK_HOURS;
+
+        // FIX #6: use integer minutes to avoid floating point boundary errors
+        const totalWorkedMinutes = Math.round(workHours * 60);
+        const withinGrace = totalWorkedMinutes >= (MIN_WORK_HOURS * 60 - GRACE_MINUTES_BEFORE_SHIFT_END);
+
+        // Rule 2: Monthly 8-hour pass — once per month if >= 8 hrs
+        const monthStartForPass = now.clone().startOf("month").toDate();
+        const monthEndForPass = now.clone().endOf("month").toDate();
+
+        const eightHourPassUsedCount = await Attendance.countDocuments({
+            user: userId,
+            date: { $gte: monthStartForPass, $lte: monthEndForPass },
+            eightHourPassUsed: true,
+        });
+
+        const qualifiesFor8HrPass =
+            eightHourPassUsedCount < MONTHLY_8HR_PASS_LIMIT &&
+            roundedWorkHours >= LENIENCY_WORK_HOURS;
+
         let halfDayReason = "";
+        let usedGrace = false;
+        let used8HrPass = false;
 
-        if (!alreadyHalfDay) {
-            const earlyExit = punchOutMinutes < scOut.shiftEnd;
-            const shortHours = workHours < MIN_WORK_HOURS;
-
-            if (earlyExit || shortHours) {
+        if (!alreadyHalfDay && shortHours) {
+            if (withinGrace) {
+                // Within 10-min grace — full day, no pass consumed
+                usedGrace = true;
+            } else if (qualifiesFor8HrPass) {
+                // Monthly 8-hour pass applied
+                used8HrPass = true;
+            } else {
+                // No leniency — mark half day
                 attendance.isHalfDay = true;
                 attendance.status = "half-day";
 
                 if (earlyExit && shortHours) {
-                    halfDayReason = `Early exit at ${formatTime(nowDate)} and worked only ${workHours} hrs`;
-                } else if (earlyExit) {
-                    halfDayReason = `Early punch out before shift end (${workHours} hrs worked)`;
+                    halfDayReason = `Early exit at ${formatTime(nowDate)} and worked only ${roundedWorkHours} hrs (min ${MIN_WORK_HOURS} hrs required)`;
                 } else {
-                    halfDayReason = `Worked only ${workHours} hrs (minimum ${MIN_WORK_HOURS} hrs required)`;
+                    halfDayReason = `Worked only ${roundedWorkHours} hrs (minimum ${MIN_WORK_HOURS} hrs required)`;
                 }
+
+                User.findById(userId).select("email name").then(employee => {
+                    if (!employee) return;
+                    sendMail({
+                        to: employee.email,
+                        subject: "⚠️ Half Day Marked",
+                        html: `
+                    <p>Hi ${employee.name},</p>
+                    <p>Your attendance has been marked as <b>Half Day</b>.</p>
+                    <p>Reason: <b>${halfDayReason}</b></p>
+                    <p>Punch Out: <b>${formatTime(nowDate)}</b> · Hours Worked: <b>${roundedWorkHours} hrs</b></p>
+                `,
+                    }).catch(err => console.error("Email error (punchOut):", err));
+                }).catch(err => console.error("User fetch error (punchOut):", err));
             }
         }
 
-        // ─────────────────────────────────────────────
-        // SEND EMAIL
-        // ─────────────────────────────────────────────
-        if (attendance.isHalfDay && !alreadyHalfDay) {
-            // ✅ Fire and forget — don't block the punch-out response
-            User.findById(userId).select("email name").then(employee => {
-                if (!employee) return;
-                sendMail({
-                    to: employee.email,
-                    subject: "⚠️ Half Day Marked",
-                    html: `
-                <p>Hi ${employee.name},</p>
-                <p>Your attendance has been marked as <b>Half Day</b>.</p>
-                <p>Reason: <b>${halfDayReason}</b></p>
-                <p>Punch Out Time: <b>${formatTime(nowDate)}</b></p>
-                <p>Total Work Hours: <b>${workHours} hrs</b></p>
-            `,
-                }).catch(err => console.error("Email error (punchOut):", err));
-            }).catch(err => console.error("User fetch error (punchOut):", err));
+        // Save pass flag on attendance record
+        if (used8HrPass) {
+            attendance.eightHourPassUsed = true;
         }
-
         // ─────────────────────────────────────────────
         // SAVE
         // ─────────────────────────────────────────────
@@ -742,6 +817,25 @@ const punchOut = async (req, res) => {
         }
 
         await attendance.save();
+
+        // ─────────────────────────────────────────────
+        // 8-HOUR PASS NOTIFICATION
+        // ─────────────────────────────────────────────
+        if (used8HrPass) {
+            User.findById(userId).select("email name").then(employee => {
+                if (!employee) return;
+                sendMail({
+                    to: employee.email,
+                    subject: "✅ Full Day Marked (Monthly 8-Hour Pass Used)",
+                    html: `
+                <p>Hi ${employee.name},</p>
+                <p>You worked <b>${roundedWorkHours} hrs</b> today (punched out at <b>${formatTime(nowDate)}</b>).</p>
+                <p>Your attendance has been marked as <b>Full Day</b> using your monthly 8-hour pass.</p>
+                <p>⚠️ This pass has been used for this month and will reset next month.</p>
+            `,
+                }).catch(err => console.error("Email error (8hr pass):", err));
+            }).catch(err => console.error("User fetch error (8hr pass):", err));
+        }
 
         // ─────────────────────────────────────────────
         // NOTIFICATIONS
@@ -773,21 +867,42 @@ const punchOut = async (req, res) => {
                 ? ` · ⚠️ Half Day`
                 : "";
 
-        // ONE record for the employee — HR/TL see it automatically
-        await createNotification(
-            io,
-            userId,
-            `${employeeName} Punched Out`,
-            `Punched out at ${punchTime} — ${workLabel}${overtimeLabel}${halfDayLabel}`,
-            "attendance",
-            {
-                userId,
-                attendanceId: attendance._id,
-                workHours,
-                overtime,
-                isHalfDay: attendance.isHalfDay,
+        // ─────────────────────────────────────────────
+        // HR / TL / MANAGER NOTIFICATIONS ONLY
+        // ─────────────────────────────────────────────
+        const employeeDoc = await User.findById(userId)
+            .select("reportingTo")
+            .lean();
+
+        const notifyUsers = await User.find({
+            $or: [
+                { role: { $in: ["hr", "manager", "admin"] } },
+                { _id: employeeDoc?.reportingTo }
+            ]
+        }).select("_id");
+
+        for (const notifyUser of notifyUsers) {
+
+            // Don't notify self
+            if (notifyUser._id.toString() === userId.toString()) {
+                continue;
             }
-        );
+
+            await createNotification(
+                io,
+                notifyUser._id,
+                `${employeeName} Punched Out`,
+                `Punched out at ${punchTime} — ${workLabel}${overtimeLabel}${halfDayLabel}`,
+                "attendance",
+                {
+                    userId,
+                    attendanceId: attendance._id,
+                    workHours,
+                    overtime,
+                    isHalfDay: attendance.isHalfDay,
+                }
+            );
+        }
 
         // ─────────────────────────────────────────────
         // SUCCESS RESPONSE
@@ -941,6 +1056,8 @@ const getMonthlyAttendance = async (req, res) => {
                 });
             }
             else {
+                const isFuture = currentDate > new Date();
+                if (isFuture) continue;
                 fullData.push({
                     _id: `absent-${i}`,
                     date: currentDate,
@@ -1170,7 +1287,12 @@ const getTeamAttendance = async (req, res) => {
 
                 const rec = memberRecords[d];
                 const isHoliday = holidayDates.has(d);
-                const weekend = isWeekend(currentDate);
+                // FIX #15: construct date in IST before checking weekend to avoid UTC server timezone shift
+                const currentDateIST = moment.tz(
+                    `${year}-${String(month).padStart(2, "0")}-${String(d).padStart(2, "0")}`,
+                    "Asia/Kolkata"
+                );
+                const weekend = currentDateIST.day() === 0 || currentDateIST.day() === 6;
                 const isFuture = currentDate > new Date();
 
                 const onLeave = memberLeaves.some(l => {
@@ -1240,8 +1362,9 @@ const getHRAttendanceOverview = async (req, res) => {
         const end = moment.tz(`${year}-${String(month).padStart(2, '0')}-01`, "Asia/Kolkata").endOf("month").toDate();
 
         // All active employees + tl + managers
+        // FIX #8: added "manager" to role filter — was silently excluded before
         const allEmployees = await User.find({
-            role: { $in: ["employee", "tl"] },
+            role: { $in: ["employee", "tl", "manager"] },
             status: "active",
         }).select("name employeeId department designation role joiningDate reportingTo");
 
