@@ -34,6 +34,9 @@ const applyCorrection = async (correction, hrUserId) => {
     correction.originalPunchIn = attendance?.punchIn || null;
     correction.originalPunchOut = attendance?.punchOut || null;
 
+    // Preserve existing punchOut before any patching
+    const existingPunchOut = attendance?.punchOut || null;
+
     if (!attendance) {
         attendance = new Attendance({
             user: correction.user,
@@ -120,7 +123,19 @@ const applyCorrection = async (correction, hrUserId) => {
     attendance.isOverridden = true;
     attendance.overriddenBy = hrUserId;
 
-    if (attendance.punchIn && !attendance.punchOut) {
+    const isPunchInOnlyCorrection = correction.type === "punch_in";
+    const latestAttendance = await Attendance.findOne({
+        user: correction.user,
+        dateString: dateString,
+    });
+    const currentPunchOut = latestAttendance?.punchOut || null;
+
+    // Restore real punchOut if it exists and correction didn't touch it
+    if (correction.type === "punch_in" && currentPunchOut) {
+        attendance.punchOut = currentPunchOut;
+        attendance.workHours = recalcWorkHours(attendance.punchIn, currentPunchOut);
+    } else if (attendance.punchIn && !attendance.punchOut) {
+        // Only auto-fill 7 PM for punch_out or both corrections with no punchOut at all
         const shiftEndIST = correctionDateIST.clone().hour(19).minute(0).second(0);
         const shiftEndDate = shiftEndIST.toDate();
         attendance.punchOut = shiftEndDate;
