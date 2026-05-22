@@ -24,18 +24,17 @@ const applyCorrection = async (correction, hrUserId) => {
     const correctionDateIST = moment(correction.date).tz("Asia/Kolkata");
     const dateString = correctionDateIST.format("YYYY-MM-DD");
     const dayStart = correctionDateIST.clone().startOf("day").toDate();
-    const dayEnd = correctionDateIST.clone().endOf("day").toDate();
 
+    // ── Always re-fetch the latest attendance doc at approval time ──────────
+    // (employee may have punched out AFTER submitting the correction request)
     let attendance = await Attendance.findOne({
         user: correction.user,
         dateString: dateString,
     });
 
+    // Snapshot originals BEFORE touching anything
     correction.originalPunchIn = attendance?.punchIn || null;
     correction.originalPunchOut = attendance?.punchOut || null;
-
-    // Preserve existing punchOut before any patching
-    const existingPunchOut = attendance?.punchOut || null;
 
     if (!attendance) {
         attendance = new Attendance({
@@ -46,27 +45,27 @@ const applyCorrection = async (correction, hrUserId) => {
         });
     }
 
-    if (correction.type === "punch_in" || correction.type === "both") {
-        if (correction.requestedPunchIn) {
-            attendance.punchIn = correction.requestedPunchIn;
-        }
+    // ── Patch ONLY the field(s) the employee requested ──────────────────────
+    // Never touch the other field — if it already has a value, keep it;
+    // if it's empty, leave it empty. No auto-fill whatsoever.
+    if ((correction.type === "punch_in" || correction.type === "both") && correction.requestedPunchIn) {
+        attendance.punchIn = correction.requestedPunchIn;
     }
 
-    if (correction.type === "punch_out" || correction.type === "both") {
-        if (correction.requestedPunchOut) {
-            attendance.punchOut = correction.requestedPunchOut;
-        }
+    if ((correction.type === "punch_out" || correction.type === "both") && correction.requestedPunchOut) {
+        attendance.punchOut = correction.requestedPunchOut;
     }
 
-    // ── Recalculate work hours ────────────────────────────────────────────────
+    // ── Recalculate workHours only when BOTH sides are genuinely present ─────
     if (attendance.punchIn && attendance.punchOut) {
         attendance.workHours = recalcWorkHours(attendance.punchIn, attendance.punchOut);
+    } else {
+        // One side is still missing — zero out so dashboard isn't misleading
+        attendance.workHours = 0;
     }
 
-    // ── Recalculate late / half-day status from the corrected punch-in time ──
-    // This is what was missing — status, isLate, isHalfDay were never updated
+    // ── Recalculate late / half-day only when punchIn is known ──────────────
     if (attendance.punchIn) {
-        // Convert to IST to get correct hours/minutes on production (UTC server)
         const punchInIST = moment(attendance.punchIn).tz("Asia/Kolkata");
         const totalMinutes = punchInIST.hour() * 60 + punchInIST.minute();
 
@@ -77,7 +76,7 @@ const applyCorrection = async (correction, hrUserId) => {
             user: correction.user,
             date: { $gte: monthStart, $lte: monthEnd },
             isLate: true,
-            _id: { $ne: attendance._id },   // exclude self
+            _id: { $ne: attendance._id },
         });
 
         let isLate = false;
@@ -85,33 +84,24 @@ const applyCorrection = async (correction, hrUserId) => {
         let status = "present";
 
         if (lateCount < MONTHLY_LATE_QUOTA) {
-            // Phase 1: quota still available
             if (totalMinutes <= LATE_TRIGGER) {
                 // ≤ 10:15 → on time
             } else if (totalMinutes <= LATE_CUTOFF) {
-                // 10:16 – 10:30 → late, consumes quota
-                isLate = true;
+                isLate = true;                        // 10:16–10:30 → late
             } else {
-                // > 10:30 → half-day
-                isHalfDay = true;
-                status = "half-day";
+                isHalfDay = true; status = "half-day"; // > 10:30 → half-day
             }
         } else {
-            // Phase 2: quota exhausted
             if (totalMinutes <= ONTIME_CUTOFF_P2) {
-                // ≤ 10:05 → on time
+                // ≤ 10:05 → on time (quota exhausted)
             } else {
-                // > 10:05 → half-day
-                isHalfDay = true;
-                status = "half-day";
+                isHalfDay = true; status = "half-day";
             }
         }
 
-        // Recalculate late minutes using IST shift start
         const shiftStartIST = correctionDateIST.clone().hour(10).minute(0).second(0);
         const lateMinutes = (isLate || isHalfDay)
-            ? parseFloat(Math.max(0, punchInIST.diff(shiftStartIST, "minutes"))
-                .toFixed(2))
+            ? parseFloat(Math.max(0, punchInIST.diff(shiftStartIST, "minutes")).toFixed(2))
             : 0;
 
         attendance.isLate = isLate;
@@ -123,26 +113,10 @@ const applyCorrection = async (correction, hrUserId) => {
     attendance.isOverridden = true;
     attendance.overriddenBy = hrUserId;
 
-    const isPunchInOnlyCorrection = correction.type === "punch_in";
-    const latestAttendance = await Attendance.findOne({
-        user: correction.user,
-        dateString: dateString,
-    });
-    const currentPunchOut = latestAttendance?.punchOut || null;
-
-    // Restore real punchOut if it exists and correction didn't touch it
-    if (correction.type === "punch_in" && currentPunchOut) {
-        attendance.punchOut = currentPunchOut;
-        attendance.workHours = recalcWorkHours(attendance.punchIn, currentPunchOut);
-    } else if (attendance.punchIn && !attendance.punchOut) {
-        // Only auto-fill 7 PM for punch_out or both corrections with no punchOut at all
-        const shiftEndIST = correctionDateIST.clone().hour(19).minute(0).second(0);
-        const shiftEndDate = shiftEndIST.toDate();
-        attendance.punchOut = shiftEndDate;
-        attendance.workHours = parseFloat(
-            ((shiftEndDate - attendance.punchIn) / (1000 * 60 * 60)).toFixed(2)
-        );
-    }
+    // ── NO auto-fill of punchOut to 7 PM — ever ──────────────────────────────
+    // If the employee only requested punch_in, their real punchOut (whenever
+    // it happens) stays untouched. If punchOut hasn't happened yet, it stays
+    // null until the employee physically punches out.
 
     await attendance.save();
     return attendance;
