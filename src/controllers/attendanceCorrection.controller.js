@@ -170,13 +170,13 @@ const applyCorrection_handler = async (req, res) => {
             });
         }
 
-        const correctionDate = new Date(date);
-        correctionDate.setHours(0, 0, 0, 0);
+        // Use IST to determine the correction date — avoids UTC midnight shifting the day
+        const correctionDateIST = moment.tz(date, "Asia/Kolkata").startOf("day");
+        const correctionDate = correctionDateIST.toDate();
 
         // ── Block future dates ─────────────────────────────────────────
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        if (correctionDate > today) {
+        const todayIST = moment().tz("Asia/Kolkata").startOf("day");
+        if (correctionDateIST.isAfter(todayIST)) {
             return res.status(400).json({
                 success: false,
                 message: "Cannot raise a correction for a future date",
@@ -184,7 +184,7 @@ const applyCorrection_handler = async (req, res) => {
         }
 
         // ── Block weekends ─────────────────────────────────────────────
-        const dayOfWeek = correctionDate.getDay();
+        const dayOfWeek = correctionDateIST.day();
         if (dayOfWeek === 0 || dayOfWeek === 6) {
             return res.status(400).json({
                 success: false,
@@ -193,7 +193,7 @@ const applyCorrection_handler = async (req, res) => {
         }
 
         // ── Block public holidays ──────────────────────────────────────
-        const correctionDateEnd = new Date(correctionDate.getTime() + 86400000 - 1);
+        const correctionDateEnd = correctionDateIST.clone().endOf("day").toDate();
 
         const holidayOnDate = await Holiday.findOne({
             date: {
