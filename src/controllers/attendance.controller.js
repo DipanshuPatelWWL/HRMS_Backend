@@ -959,11 +959,15 @@ const getTodayAttendance = async (req, res) => {
             isLate: true,
         });
 
+        const userForShift = await User.findById(userId).select("shift").lean();
+        const scForShift = getShiftConfig(userForShift?.shift);
+
         res.status(200).json({
             success: true,
             attendance,
             lateQuotaUsed,
             lateQuotaMax: MONTHLY_LATE_QUOTA,
+            shiftEnd: scForShift.shiftEnd,
         });
 
     } catch (error) {

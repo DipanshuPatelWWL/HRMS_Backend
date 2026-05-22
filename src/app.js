@@ -28,6 +28,7 @@ const AIRoutes = require("./routes/ai.routes");
 const HRAIRoutes = require("./routes/hr.ai.routes");
 const DailyReportRoutes = require("./routes/dailyReports.routes");
 const AssetsRoutes = require("./routes/assetRoutes");
+const PolicyRoutes = require("./routes/policy.routes");
 
 
 const app = express();
@@ -118,6 +119,7 @@ app.use("/api/ai", AIRoutes);
 app.use("/api/hr-ai", HRAIRoutes);
 app.use("/api", DailyReportRoutes);
 app.use("/api/assets", AssetsRoutes);
+app.use("/api/policies", PolicyRoutes);
 
 // ✅ EXPORT (IMPORTANT)
 module.exports = { app, server };

@@ -8,8 +8,6 @@ const celebrationSchema = new mongoose.Schema(
             required: true,
         },
 
-        // templateId is now optional — celebrations can be created
-        // without a saved template (using templateStyle instead)
         templateId: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "CelebrationTemplate",
