@@ -301,7 +301,8 @@ const punchIn = async (req, res) => {
             ) {
                 const io = req.app.get("io");
 
-                await createNotification(
+                // Fire-and-forget — device alert must never crash punch-in
+                createNotification(
                     io,
                     userId,
                     "⚠️ Device Changed",
@@ -312,7 +313,7 @@ const punchIn = async (req, res) => {
                         oldDevice: lastAttendance.deviceId,
                         newDevice: deviceId,
                     }
-                );
+                ).catch(err => console.error("Device change notification error:", err));
             }
         }
 
@@ -486,34 +487,38 @@ const punchIn = async (req, res) => {
         // ─────────────────────────────────────────────
         // HR / TL / MANAGER NOTIFICATIONS ONLY
         // ─────────────────────────────────────────────
-        const notifyUsers = await User.find({
+        const notifyUsersRaw = await User.find({
             $or: [
                 { role: { $in: ["hr", "manager", "admin"] } },
-                { _id: userDoc?.reportingTo }
+                ...(userDoc?.reportingTo ? [{ _id: userDoc.reportingTo }] : []),
             ]
         }).select("_id");
 
-        for (const notifyUser of notifyUsers) {
-            // Don't send to self
-            if (notifyUser._id.toString() === userId.toString()) {
-                continue;
-            }
-
-            await createNotification(
-                io,
-                notifyUser._id,
-                `${employeeName} Punched In`,
-                `Punched in at ${punchTime} — ${statusLabel}`,
-                "attendance",
-                {
-                    userId,
-                    attendanceId: attendance._id,
-                    status,
-                    isLate,
-                    isHalfDay,
-                }
-            );
+        // Deduplicate by string ID to avoid double-notifying
+        const notifyIdSet = new Set();
+        for (const u of notifyUsersRaw) {
+            const sid = u._id.toString();
+            if (sid !== userId.toString()) notifyIdSet.add(sid);
         }
+
+        await Promise.allSettled(
+            [...notifyIdSet].map(sid =>
+                createNotification(
+                    io,
+                    sid,
+                    `${employeeName} Punched In`,
+                    `Punched in at ${punchTime} — ${statusLabel}`,
+                    "attendance",
+                    {
+                        userId,
+                        attendanceId: attendance._id,
+                        status,
+                        isLate,
+                        isHalfDay,
+                    }
+                )
+            )
+        );
 
         // ─────────────────────────────────────────────
         // SUCCESS RESPONSE
@@ -874,35 +879,38 @@ const punchOut = async (req, res) => {
             .select("reportingTo")
             .lean();
 
-        const notifyUsers = await User.find({
+        const notifyUsersRaw = await User.find({
             $or: [
                 { role: { $in: ["hr", "manager", "admin"] } },
-                { _id: employeeDoc?.reportingTo }
+                ...(employeeDoc?.reportingTo ? [{ _id: employeeDoc.reportingTo }] : []),
             ]
         }).select("_id");
 
-        for (const notifyUser of notifyUsers) {
-
-            // Don't notify self
-            if (notifyUser._id.toString() === userId.toString()) {
-                continue;
-            }
-
-            await createNotification(
-                io,
-                notifyUser._id,
-                `${employeeName} Punched Out`,
-                `Punched out at ${punchTime} — ${workLabel}${overtimeLabel}${halfDayLabel}`,
-                "attendance",
-                {
-                    userId,
-                    attendanceId: attendance._id,
-                    workHours,
-                    overtime,
-                    isHalfDay: attendance.isHalfDay,
-                }
-            );
+        // Deduplicate
+        const notifyIdSet = new Set();
+        for (const u of notifyUsersRaw) {
+            const sid = u._id.toString();
+            if (sid !== userId.toString()) notifyIdSet.add(sid);
         }
+
+        await Promise.allSettled(
+            [...notifyIdSet].map(sid =>
+                createNotification(
+                    io,
+                    sid,
+                    `${employeeName} Punched Out`,
+                    `Punched out at ${punchTime} — ${workLabel}${overtimeLabel}${halfDayLabel}`,
+                    "attendance",
+                    {
+                        userId,
+                        attendanceId: attendance._id,
+                        workHours,
+                        overtime,
+                        isHalfDay: attendance.isHalfDay,
+                    }
+                )
+            )
+        );
 
         // ─────────────────────────────────────────────
         // SUCCESS RESPONSE
@@ -1200,16 +1208,18 @@ const getTeamAttendance = async (req, res) => {
             toDate: { $gte: start },
         }).populate("user", "name employeeId");
 
-        // ── TODAY summary ──────────────────────────────
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const todayEnd = new Date(today);
-        todayEnd.setHours(23, 59, 59, 999);
+        // ── TODAY summary — use IST dateString for consistency ──────────
+        const todayIST = moment().tz("Asia/Kolkata");
+        const todayString = todayIST.format("YYYY-MM-DD");
 
         const todayRecords = await Attendance.find({
             user: { $in: teamIds },
-            date: { $gte: today, $lte: todayEnd },
+            dateString: todayString,
         }).populate("user", "name employeeId department");
+
+        // Keep `today` as a JS Date for leave-range comparisons below
+        const today = todayIST.clone().startOf("day").toDate();
+        const todayEnd = todayIST.clone().endOf("day").toDate();
 
         // Who is on leave today
         const onLeaveToday = leaves.filter(l => {
@@ -1252,7 +1262,7 @@ const getTeamAttendance = async (req, res) => {
                 isLate: rec?.isLate || false,
                 isHalfDay: rec?.isHalfDay || false,
                 lateMinutes: rec?.lateMinutes || 0,
-                missedPunchOut: rec?.punchIn && !rec?.punchOut && new Date().getHours() >= 19,
+                missedPunchOut: rec?.punchIn && !rec?.punchOut && todayIST.hour() >= 19,
                 onLeave,
             };
         });
@@ -1388,16 +1398,18 @@ const getHRAttendanceOverview = async (req, res) => {
             toDate: { $gte: start },
         }).populate("user", "name employeeId department");
 
-        // ── TODAY summary ──────────────────────────────
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const todayEnd = new Date(today);
-        todayEnd.setHours(23, 59, 59, 999);
+        // ── TODAY summary — use IST dateString for consistency ──────────
+        const todayIST = moment().tz("Asia/Kolkata");
+        const todayString = todayIST.format("YYYY-MM-DD");
 
         const todayRecords = await Attendance.find({
             user: { $in: allIds },
-            date: { $gte: today, $lte: todayEnd },
+            dateString: todayString,
         }).populate("user", "name employeeId department designation role");
+
+        // Keep `today` as a JS Date for leave-range comparisons below
+        const today = todayIST.clone().startOf("day").toDate();
+        const todayEnd = todayIST.clone().endOf("day").toDate();
 
         // Who is on leave today
         const onLeaveToday = leaves.filter(l => {
@@ -1437,7 +1449,7 @@ const getHRAttendanceOverview = async (req, res) => {
                 isLate: rec?.isLate || false,
                 isHalfDay: rec?.isHalfDay || false,
                 lateMinutes: rec?.lateMinutes || 0,
-                missedPunchOut: rec?.punchIn && !rec?.punchOut && new Date().getHours() >= 19,
+                missedPunchOut: rec?.punchIn && !rec?.punchOut && todayIST.hour() >= 19,
                 onLeave,
                 leaveType: onLeave ? onLeaveToday.find(l => l.user._id.toString() === emp._id.toString())?.type : null,
             };

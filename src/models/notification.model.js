@@ -28,6 +28,7 @@ const notificationSchema = new mongoose.Schema(
                 "ticket_replied",
                 "ticket_resolved",
                 "general",
+                "security",
             ],
             default: "general",
         },
