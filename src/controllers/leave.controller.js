@@ -4,6 +4,7 @@ const Attendance = require("../models/attendance.model");
 const { createNotification, broadcastNotification, notifyLeaveApplied: notifyLeaveAppliedSocket } = require("./notification.controller");
 const Holiday = require("../models/holiday.model");
 const { notifyLeaveApplied: notifyLeaveAppliedEmail, notifyLeaveApproved, notifyLeaveRejected } = require("../services/emailNotify");
+const moment = require("moment-timezone");
 
 // ─────────────────────────────────────────────
 //  HELPER — count working days in a range
@@ -40,16 +41,18 @@ const countWorkingDays = async (fromDate, toDate) => {
 //  (called only once — by the final approver)
 // ─────────────────────────────────────────────
 const finalizeApproval = async (leave) => {
-    const from = new Date(leave.fromDate);
-    const to = new Date(leave.toDate);
-    from.setHours(0, 0, 0, 0);
-    to.setHours(23, 59, 59, 999);
+    const fromIST = moment(leave.fromDate).tz("Asia/Kolkata").startOf("day");
+    const toIST = moment(leave.toDate).tz("Asia/Kolkata").endOf("day");
+    const dateStrings = [];
+    const cursor = fromIST.clone();
+    while (cursor.isSameOrBefore(toIST, "day")) {
+        dateStrings.push(cursor.format("YYYY-MM-DD"));
+        cursor.add(1, "day");
+    }
 
-    // ── 1. Remove any attendance records that fall inside the leave range
-    //       (handles retroactive leave for days already punched in)
     await Attendance.deleteMany({
         user: leave.user,
-        date: { $gte: from, $lte: to },
+        dateString: { $in: dateStrings },
     });
 
     // ── 2. Deduct leave balance (only once, by final approver)

@@ -3,6 +3,7 @@ const Attendance = require("../models/attendance.model");
 const { createNotification, broadcastNotification } = require("./notification.controller");
 const Holiday = require("../models/holiday.model");
 const Leave = require("../models/leave.model");
+const moment = require("moment-timezone");
 
 
 const LATE_TRIGGER = 10 * 60 + 15;   // 10:15 → late, quota consumed
@@ -20,13 +21,14 @@ const recalcWorkHours = (punchIn, punchOut) => {
 
 
 const applyCorrection = async (correction, hrUserId) => {
-    const dayStart = new Date(correction.date);
-    dayStart.setHours(0, 0, 0, 0);
-    const dayEnd = new Date(dayStart.getTime() + 86400000 - 1);
+    const correctionDateIST = moment(correction.date).tz("Asia/Kolkata");
+    const dateString = correctionDateIST.format("YYYY-MM-DD");
+    const dayStart = correctionDateIST.clone().startOf("day").toDate();
+    const dayEnd = correctionDateIST.clone().endOf("day").toDate();
 
     let attendance = await Attendance.findOne({
         user: correction.user,
-        date: { $gte: dayStart, $lte: dayEnd },
+        dateString: dateString,
     });
 
     correction.originalPunchIn = attendance?.punchIn || null;
@@ -36,6 +38,7 @@ const applyCorrection = async (correction, hrUserId) => {
         attendance = new Attendance({
             user: correction.user,
             date: dayStart,
+            dateString: dateString,
             status: "present",
         });
     }
@@ -60,13 +63,12 @@ const applyCorrection = async (correction, hrUserId) => {
     // ── Recalculate late / half-day status from the corrected punch-in time ──
     // This is what was missing — status, isLate, isHalfDay were never updated
     if (attendance.punchIn) {
-        const punchIn = new Date(attendance.punchIn);
-        const totalMinutes = punchIn.getHours() * 60 + punchIn.getMinutes();
+        // Convert to IST to get correct hours/minutes on production (UTC server)
+        const punchInIST = moment(attendance.punchIn).tz("Asia/Kolkata");
+        const totalMinutes = punchInIST.hour() * 60 + punchInIST.minute();
 
-        // Count how many late-quota slots this user has used this month
-        // Exclude the current record itself to avoid double-counting
-        const monthStart = new Date(punchIn.getFullYear(), punchIn.getMonth(), 1);
-        const monthEnd = new Date(punchIn.getFullYear(), punchIn.getMonth() + 1, 0, 23, 59, 59);
+        const monthStart = punchInIST.clone().startOf("month").toDate();
+        const monthEnd = punchInIST.clone().endOf("month").toDate();
 
         const lateCount = await Attendance.countDocuments({
             user: correction.user,
@@ -102,11 +104,11 @@ const applyCorrection = async (correction, hrUserId) => {
             }
         }
 
-        // Recalculate late minutes (only meaningful when late/half-day)
-        const shiftStart = new Date(dayStart);
-        shiftStart.setHours(10, 0, 0, 0);
+        // Recalculate late minutes using IST shift start
+        const shiftStartIST = correctionDateIST.clone().hour(10).minute(0).second(0);
         const lateMinutes = (isLate || isHalfDay)
-            ? parseFloat(Math.max(0, (punchIn - shiftStart) / (1000 * 60)).toFixed(2))
+            ? parseFloat(Math.max(0, punchInIST.diff(shiftStartIST, "minutes"))
+                .toFixed(2))
             : 0;
 
         attendance.isLate = isLate;
@@ -119,11 +121,11 @@ const applyCorrection = async (correction, hrUserId) => {
     attendance.overriddenBy = hrUserId;
 
     if (attendance.punchIn && !attendance.punchOut) {
-        const shiftEnd = new Date(attendance.date);
-        shiftEnd.setHours(17, 0, 0, 0);
-        attendance.punchOut = shiftEnd;
+        const shiftEndIST = correctionDateIST.clone().hour(19).minute(0).second(0);
+        const shiftEndDate = shiftEndIST.toDate();
+        attendance.punchOut = shiftEndDate;
         attendance.workHours = parseFloat(
-            ((shiftEnd - attendance.punchIn) / (1000 * 60 * 60)).toFixed(2)
+            ((shiftEndDate - attendance.punchIn) / (1000 * 60 * 60)).toFixed(2)
         );
     }
 

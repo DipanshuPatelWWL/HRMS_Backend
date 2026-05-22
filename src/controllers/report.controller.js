@@ -5,6 +5,7 @@ const User = require("../models/user.model");
 const Recruitment = require("../models/recruitment.model");
 const Performance = require("../models/performance.model");
 const Training = require("../models/training.model");
+const moment = require("moment-timezone");
 
 
 const getAttendanceReport = async (req, res) => {
@@ -150,15 +151,14 @@ const getHRDashboardStats = async (req, res) => {
         const totalEmployees = await User.countDocuments({ role: "employee" });
         const pendingLeaves = await Leave.countDocuments({ status: "pending" });
 
-        // ── Present today ────────────────────────────────────────────
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const tomorrow = new Date(today);
-        tomorrow.setDate(tomorrow.getDate() + 1);
+        // ── Present today — use IST dateString to match how punchIn saves ──
+        const moment = require("moment-timezone");
+        const todayIST = moment().tz("Asia/Kolkata");
+        const todayString = todayIST.format("YYYY-MM-DD");
 
         const presentToday = await Attendance.countDocuments({
-            date: { $gte: today, $lt: tomorrow },
-            status: "present",
+            dateString: todayString,
+            status: { $in: ["present", "half-day"] },
         });
 
         // ── Payroll count this month ─────────────────────────────────

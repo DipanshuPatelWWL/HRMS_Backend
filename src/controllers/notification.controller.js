@@ -139,29 +139,7 @@ const getMyNotifications = async (req, res) => {
         const { role, _id: userId } = req.user;
 
         if (role === "hr" || role === "manager" || role === "admin") {
-            const SHARED_TYPES = [
-                "leave_applied",
-                "leave_approved",
-                "leave_rejected",
-                "attendance",
-                "announcement",
-                "task_assigned",
-                "task_updated",
-                "task_done",
-                "ticket_replied",
-                "ticket_resolved",
-                "payroll",
-            ];
-
-            const data = await Notification.find({
-                $or: [
-                    { user: userId },                        // own — everything
-                    {
-                        user: { $ne: userId },
-                        type: { $in: SHARED_TYPES },
-                    },
-                ],
-            })
+            const data = await Notification.find({ user: userId })
                 .sort({ createdAt: -1 })
                 .limit(100)
                 .lean();
@@ -169,21 +147,7 @@ const getMyNotifications = async (req, res) => {
         }
 
         if (role === "tl") {
-            // TL sees own notifications + their direct reports' NON-system notifications
-            const teamMembers = await User.find({ reportingTo: userId })
-                .select("_id")
-                .lean();
-            const teamIds = teamMembers.map(u => u._id.toString());
-
-            const data = await Notification.find({
-                $or: [
-                    { user: userId },                        // own — everything
-                    {
-                        user: { $in: teamIds },              // team — exclude personal
-                        type: { $ne: "system" },
-                    },
-                ],
-            })
+            const data = await Notification.find({ user: userId })
                 .sort({ createdAt: -1 })
                 .limit(50)
                 .lean();
@@ -210,25 +174,9 @@ const getUnreadCount = async (req, res) => {
         let query;
 
         if (role === "hr" || role === "manager" || role === "admin") {
-            query = {
-                isRead: false,
-                $or: [
-                    { user: userId },
-                    { user: { $ne: userId }, type: { $ne: "system" } },
-                ],
-            };
+            query = { isRead: false, user: userId };
         } else if (role === "tl") {
-            const teamMembers = await User.find({ reportingTo: userId })
-                .select("_id")
-                .lean();
-            const teamIds = teamMembers.map(u => u._id.toString());
-            query = {
-                isRead: false,
-                $or: [
-                    { user: userId },
-                    { user: { $in: teamIds }, type: { $ne: "system" } },
-                ],
-            };
+            query = { isRead: false, user: userId };
         } else {
             // Employee — only their own
             query = { isRead: false, user: userId };
@@ -262,25 +210,9 @@ const markAllRead = async (req, res) => {
         let filter;
 
         if (role === "hr" || role === "manager" || role === "admin") {
-            filter = {
-                isRead: false,
-                $or: [
-                    { user: userId },
-                    { user: { $ne: userId }, type: { $ne: "system" } },
-                ],
-            };
+            filter = { isRead: false, user: userId };
         } else if (role === "tl") {
-            const teamMembers = await User.find({ reportingTo: userId })
-                .select("_id")
-                .lean();
-            const teamIds = teamMembers.map(u => u._id.toString());
-            filter = {
-                isRead: false,
-                $or: [
-                    { user: userId },
-                    { user: { $in: teamIds }, type: { $ne: "system" } },
-                ],
-            };
+            filter = { isRead: false, user: userId };
         } else {
             filter = { isRead: false, user: userId };
         }
@@ -300,24 +232,9 @@ const clearAll = async (req, res) => {
         let filter;
 
         if (role === "hr" || role === "manager" || role === "admin") {
-            // Only clear what they can see — not other users' system notifications
-            filter = {
-                $or: [
-                    { user: userId },
-                    { user: { $ne: userId }, type: { $ne: "system" } },
-                ],
-            };
+            filter = { user: userId };
         } else if (role === "tl") {
-            const teamMembers = await User.find({ reportingTo: userId })
-                .select("_id")
-                .lean();
-            const teamIds = teamMembers.map(u => u._id.toString());
-            filter = {
-                $or: [
-                    { user: userId },
-                    { user: { $in: teamIds }, type: { $ne: "system" } },
-                ],
-            };
+            filter = { user: userId };
         } else {
             filter = { user: userId };
         }
