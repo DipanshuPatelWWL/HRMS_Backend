@@ -1364,7 +1364,7 @@ const getHRAttendanceOverview = async (req, res) => {
         // All active employees + tl + managers
         // FIX #8: added "manager" to role filter — was silently excluded before
         const allEmployees = await User.find({
-            role: { $in: ["employee", "tl", "manager"] },
+            role: { $in: ["employee", "tl"] },
             status: "active",
         }).select("name employeeId department designation role joiningDate reportingTo");
 
