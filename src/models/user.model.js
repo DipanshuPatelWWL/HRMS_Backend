@@ -277,7 +277,6 @@ const userSchema = new mongoose.Schema(
             halfDayAfterMinutes: { type: Number, default: 30 },
             label: { type: String, default: "", trim: true },
         },
-
         leaveBalance: {
             casual: {
                 total: { type: Number, default: 12 },

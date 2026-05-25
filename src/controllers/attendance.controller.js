@@ -21,6 +21,16 @@ const OFFICE_SUBNETS = process.env.OFFICE_SUBNETS
     ? process.env.OFFICE_SUBNETS.split(",").map(s => s.trim())
     : ["192.168.1.", "192.168.2.", "192.168.29."];
 
+const ALLOWED_DEVICES = [
+    {
+        deviceUUID: "366290E3-BD5F-4B9B-85E3-BB52AB3CA3D7",
+        productId: "00342-50786-03990-AAOEM",
+        label: "Dipanshu Office PC",
+    },
+    // add more office machines here:
+    // { deviceUUID: "XXXXXXXX-...", productId: "00000-00000-...", label: "Reception PC" },
+];
+
 // ─────────────────────────────────────────────
 //  SHIFT TIMING (in minutes from midnight)
 // ─────────────────────────────────────────────
@@ -112,6 +122,8 @@ const punchIn = async (req, res) => {
             wifiSSID,
             isOfflinePunch,
             offlineTimestamp,
+            deviceUUID,
+            productId,
         } = req.body || {};
 
         // ─────────────────────────────────────────────
@@ -232,98 +244,93 @@ const punchIn = async (req, res) => {
             req._halfDayLeave = true;
         }
 
+
         // ─────────────────────────────────────────────
-        // GET CLIENT IP — spoof protected
+        // DEVICE / LOCATION VERIFICATION
         // ─────────────────────────────────────────────
-        // const rawForwardedFor = req.headers["x-forwarded-for"];
-        // const socketIP = req.socket.remoteAddress || "";
+        const userDoc = await User.findById(userId)
+            .select("shift reportingTo")
+            .lean();
 
-        // In production: only trust x-forwarded-for if request
-        // actually came through our Nginx (socketIP is localhost)
-        // const isFromNginx =
-        //     socketIP === "127.0.0.1" ||
-        //     socketIP === "::1" ||
-        //     socketIP === "::ffff:127.0.0.1";
+        let verifiedBy = null;
+        let clientIP = (req.socket?.remoteAddress || "").replace(/^::ffff:/, "");
 
-        // const clientIP =
-        //     (process.env.NODE_ENV === "production" && isFromNginx && rawForwardedFor)
-        //         ? rawForwardedFor.split(",")[0].trim()
-        //         : (process.env.NODE_ENV !== "production" && rawForwardedFor)
-        //             ? rawForwardedFor.split(",")[0].trim()
-        //             : socketIP;
+        if (isOfflinePunch) {
+            verifiedBy = "offline";
 
+        } else if (deviceUUID || productId) {
+            // ── Electron desktop agent sent device identity ──────────────
+            // Normalize incoming values once
+            const incomingUUID = (deviceUUID || "").trim().toUpperCase();
+            const incomingProduct = (productId || "").trim().toUpperCase();
 
-        // const normalizedIP = clientIP
-        //     .replace(/^::ffff:/, "")
-        //     .replace(/^::1$/, "127.0.0.1");
+            // Check against the hardcoded ALLOWED_DEVICES list
+            const matchedDevice = ALLOWED_DEVICES.find(d => {
+                const uuidOk = d.deviceUUID.trim().toUpperCase() === incomingUUID;
+                const productOk = d.productId.trim().toUpperCase() === incomingProduct;
+                return uuidOk && productOk;   // both must match
+            });
 
-        // ─── DEBUG BLOCK 1 ───────────────────────────────────
-        // console.log("🔍 IP DEBUG:", {
-        //     rawForwardedFor,
-        //     socketIP,
-        //     clientIP,
-        //     normalizedIP,
-        //     isOfficeNetwork: OFFICE_SUBNETS.some(subnet => normalizedIP.startsWith(subnet)),
-        //     OFFICE_SUBNETS,
-        //     NODE_ENV: process.env.NODE_ENV,
-        //     isFromNginx,
-        // });
+            if (matchedDevice) {
+                // ✅ Known office machine — no GPS required
+                console.log(`Device verified: ${matchedDevice.label}`);
+                verifiedBy = "device";
 
-        // const isOfficeNetwork = OFFICE_SUBNETS.some(subnet => normalizedIP.startsWith(subnet));
+            } else {
+                // ❌ Not in the allowed list → fall back to GPS
+                if (lat === undefined || lat === null || lng === undefined || lng === null) {
+                    return res.status(403).json({
+                        success: false,
+                        message: "This device is not an authorised office machine. Please enable GPS to punch in.",
+                    });
+                }
 
-        // let verifiedBy = null;
+                if (isNaN(Number(lat)) || isNaN(Number(lng))) {
+                    return res.status(400).json({
+                        success: false,
+                        message: "Invalid location coordinates received.",
+                    });
+                }
 
-        // ─── DEBUG BLOCK 2 ───────────────────────────────────
-        // console.log("✅ VERIFICATION RESULT:", {
-        //     verifiedBy,
-        //     isOfficeNetwork,
-        //     hasLatLng: lat !== undefined && lng !== undefined,
-        //     isOfflinePunch,
-        // });
+                const dist = getDistance(Number(lat), Number(lng), OFFICE_LAT, OFFICE_LNG);
 
-        // if (isOfficeNetwork) {
-        //     // ✅ On office network (PC / Laptop on office WiFi) → allow directly
-        //     verifiedBy = "ip";
-        //}
-        // else if (!isOfflinePunch) {
-        //     // ✅ Not on office network → verify by GPS
+                if (dist > GEOFENCE_RADIUS) {
+                    return res.status(403).json({
+                        success: false,
+                        message: `Unauthorised device and you are ${Math.round(dist)}m away from office.`,
+                    });
+                }
 
-        //     if (lat === undefined || lat === null || lng === undefined || lng === null) {
-        //         return res.status(400).json({
-        //             success: false,
-        //             message: "You are not on office network. Please enable GPS to punch in.",
-        //         });
-        //     }
+                if (accuracy !== undefined && Number(accuracy) > 150) {
+                    return res.status(403).json({
+                        success: false,
+                        message: "Low GPS accuracy detected. Please try again.",
+                    });
+                }
 
-        //     if (isNaN(Number(lat)) || isNaN(Number(lng))) {
-        //         return res.status(400).json({
-        //             success: false,
-        //             message: "Invalid location coordinates received.",
-        //         });
-        //     }
+                verifiedBy = "location";
+            }
 
-        //     const dist = getDistance(lat, lng, OFFICE_LAT, OFFICE_LNG);
+        } else {
+            // ── Browser / non-Electron — GPS required ───────────────────
+            if (lat === undefined || lat === null || lng === undefined || lng === null) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Please enable GPS to punch in.",
+                });
+            }
 
-        //     if (dist > GEOFENCE_RADIUS) {
-        //         return res.status(403).json({
-        //             success: false,
-        //             message: `Office network not detected and you are ${Math.round(dist)}m away from office.`,
-        //         });
-        //     }
+            const dist = getDistance(Number(lat), Number(lng), OFFICE_LAT, OFFICE_LNG);
 
-        //     if (accuracy !== undefined && Number(accuracy) > 150) {
-        //         return res.status(403).json({
-        //             success: false,
-        //             message: "Low GPS accuracy detected. Please try again.",
-        //         });
-        //     }
+            if (dist > GEOFENCE_RADIUS) {
+                return res.status(403).json({
+                    success: false,
+                    message: `You are ${Math.round(dist)}m away from office.`,
+                });
+            }
 
-        //     verifiedBy = "location";
-
-        // } else {
-        //     // isOfflinePunch = true, not on office network → allow (offline sync)
-        //     verifiedBy = "offline";
-        // }
+            verifiedBy = "location";
+        }
 
         // ─────────────────────────────────────────────
         // DUPLICATE CHECK
@@ -377,11 +384,6 @@ const punchIn = async (req, res) => {
         // ─────────────────────────────────────────────
         // LATE / HALF DAY LOGIC
         // ─────────────────────────────────────────────
-
-        // ── Load user's shift config ──────────────────────────────────
-        const userDoc = await User.findById(userId)
-            .select("shift reportingTo")
-            .lean();
         const sc = getShiftConfig(userDoc?.shift);
 
         const monthStart = now.clone().startOf("month").toDate();
@@ -464,10 +466,6 @@ const punchIn = async (req, res) => {
                 status = "half-day";
             }
 
-            const verifiedBy = null;
-            const clientIP = null;
-
-
             attendance = await Attendance.create({
                 user: userId,
                 date: todayStart,
@@ -483,13 +481,15 @@ const punchIn = async (req, res) => {
                     accuracy,
                 },
                 deviceId: deviceId || "",
+                deviceUUID: deviceUUID || "",   // Windows hardware UUID
+                productId: productId || "",   // Windows Product ID
                 wifiSSID: wifiSSID || "",
                 isOfflinePunch: !!isOfflinePunch,
                 syncedAt: isOfflinePunch
                     ? serverNow.toDate()
                     : null,
-                verifiedBy,        // ← "ip" | "location" | "offline"
-                clientIP,          // ← for audit logs
+                verifiedBy,   // "device" | "device_partial" | "location" | "offline"
+                clientIP,
             });
 
         } catch (err) {
@@ -504,6 +504,7 @@ const punchIn = async (req, res) => {
 
             throw err;
         }
+
         // ─────────────────────────────────────────────
         // EMAIL ALERT
         // ─────────────────────────────────────────────

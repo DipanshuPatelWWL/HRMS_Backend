@@ -99,9 +99,13 @@ io.on("connection", (socket) => {
 
     // Also support manual join from frontend
     socket.on("join:hr_room", () => {
-        if (allowedRoles.includes(socket.user?.role)) {
-            socket.join("hr_room");
-        }
+        socket.join("hr_room");
+        console.log(`Socket ${socket.id} joined hr_room`);
+    });
+
+    socket.on("join:user_room", ({ userId }) => {
+        socket.join(`user_${userId}`);
+        console.log(`Socket ${socket.id} joined user_${userId}`);
     });
 
     socket.on("disconnect", () => {

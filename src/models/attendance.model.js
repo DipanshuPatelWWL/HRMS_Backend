@@ -79,6 +79,15 @@ const attendanceSchema = new mongoose.Schema(
             type: String,
             default: "",
         },
+        // Hardware identity sent by Electron agent at punch-in time
+        deviceUUID: {
+            type: String,
+            default: "",
+        },
+        productId: {
+            type: String,
+            default: "",
+        },
         wifiSSID: {
             type: String,
             default: "",
@@ -101,7 +110,12 @@ const attendanceSchema = new mongoose.Schema(
         },
         verifiedBy: {
             type: String,
-            enum: ["ip", "location", "offline"],
+            enum: [
+                "ip",
+                "location",
+                "offline",
+                "device",
+            ],
             default: "location",
         },
 
