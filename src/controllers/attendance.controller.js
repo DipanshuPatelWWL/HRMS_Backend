@@ -1314,12 +1314,12 @@ const getTeamAttendance = async (req, res) => {
             const onLeave = onLeaveTodayIds.has(member._id.toString());
             const isHolidayToday = isWeekend(today) || holidayDates.has(today.getDate());
 
+            // NEW
             let attendanceStatus = "absent";
-            if (isHolidayToday) attendanceStatus = "holiday";
-            else if (onLeave) attendanceStatus = "on_leave";
-            else if (rec?.punchIn && rec?.punchOut) attendanceStatus = "punched_out";
-            else if (rec?.punchIn && !rec?.punchOut) attendanceStatus = "punched_in";
+            if (rec?.punchIn && rec?.punchOut) attendanceStatus = "punched_out";
             else if (rec?.punchIn) attendanceStatus = "punched_in";
+            else if (onLeave) attendanceStatus = "on_leave";
+            else if (isHolidayToday) attendanceStatus = "holiday";
             else attendanceStatus = "absent";
 
             return {
@@ -1516,11 +1516,10 @@ const getHRAttendanceOverview = async (req, res) => {
             const onLeave = onLeaveTodayIds.has(emp._id.toString());
 
             let attendanceStatus = "absent";
-            if (isHolidayToday) attendanceStatus = "holiday";
-            else if (onLeave) attendanceStatus = "on_leave";
-            else if (rec?.punchIn && rec?.punchOut) attendanceStatus = "punched_out";
-            else if (rec?.punchIn && !rec?.punchOut) attendanceStatus = "punched_in";
+            if (rec?.punchIn && rec?.punchOut) attendanceStatus = "punched_out";
             else if (rec?.punchIn) attendanceStatus = "punched_in";
+            else if (onLeave) attendanceStatus = "on_leave";
+            else if (isHolidayToday) attendanceStatus = "holiday";
             else attendanceStatus = "absent";
 
             // Derive shift end for this specific employee

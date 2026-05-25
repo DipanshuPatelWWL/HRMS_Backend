@@ -14,7 +14,6 @@ const createAnnouncement = async (req, res) => {
                 message: "title and body are required",
             });
         }
-
         const announcement = await Announcement.create({
             title,
             body,
