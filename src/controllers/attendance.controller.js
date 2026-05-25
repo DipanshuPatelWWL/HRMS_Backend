@@ -13,6 +13,14 @@ const OFFICE_LAT = 28.615965009689685;
 const OFFICE_LNG = 77.37918363418639;
 const GEOFENCE_RADIUS = 50; // meters
 
+
+// ─────────────────────────────────────────────
+//  OFFICE NETWORK CONFIG
+// ─────────────────────────────────────────────
+const OFFICE_SUBNETS = process.env.OFFICE_SUBNETS
+    ? process.env.OFFICE_SUBNETS.split(",").map(s => s.trim())
+    : ["192.168.1.", "192.168.2.", "192.168.29."];
+
 // ─────────────────────────────────────────────
 //  SHIFT TIMING (in minutes from midnight)
 // ─────────────────────────────────────────────
@@ -225,14 +233,46 @@ const punchIn = async (req, res) => {
         }
 
         // ─────────────────────────────────────────────
-        // GEOFENCE CHECK
+        // GET CLIENT IP — spoof protected
         // ─────────────────────────────────────────────
-        if (!isOfflinePunch) {
+        const rawForwardedFor = req.headers["x-forwarded-for"];
+        const socketIP = req.socket.remoteAddress || "";
+
+        // In production: only trust x-forwarded-for if request
+        // actually came through our Nginx (socketIP is localhost)
+        const isFromNginx =
+            socketIP === "127.0.0.1" ||
+            socketIP === "::1" ||
+            socketIP === "::ffff:127.0.0.1";
+
+        const clientIP =
+            (process.env.NODE_ENV === "production" && isFromNginx && rawForwardedFor)
+                ? rawForwardedFor.split(",")[0].trim()
+                : (process.env.NODE_ENV !== "production" && rawForwardedFor)
+                    ? rawForwardedFor.split(",")[0].trim()
+                    : socketIP;
+
+
+        const normalizedIP = clientIP
+            .replace(/^::ffff:/, "")
+            .replace(/^::1$/, "127.0.0.1");
+
+
+        const isOfficeNetwork = OFFICE_SUBNETS.some(subnet => normalizedIP.startsWith(subnet));
+
+        let verifiedBy = null;
+
+        if (isOfficeNetwork) {
+            // ✅ On office network (PC / Laptop on office WiFi) → allow directly
+            verifiedBy = "ip";
+
+        } else if (!isOfflinePunch) {
+            // ✅ Not on office network → verify by GPS
 
             if (lat === undefined || lat === null || lng === undefined || lng === null) {
                 return res.status(400).json({
                     success: false,
-                    message: "Location coordinates are required. Please enable GPS and try again.",
+                    message: "You are not on office network. Please enable GPS to punch in.",
                 });
             }
 
@@ -243,29 +283,27 @@ const punchIn = async (req, res) => {
                 });
             }
 
-            const dist = getDistance(
-                lat,
-                lng,
-                OFFICE_LAT,
-                OFFICE_LNG
-            );
+            const dist = getDistance(lat, lng, OFFICE_LAT, OFFICE_LNG);
 
             if (dist > GEOFENCE_RADIUS) {
                 return res.status(403).json({
                     success: false,
-                    message: `You are ${Math.round(dist)}m away from office`,
+                    message: `Office network not detected and you are ${Math.round(dist)}m away from office.`,
                 });
             }
 
-            if (
-                accuracy !== undefined &&
-                Number(accuracy) > 150
-            ) {
+            if (accuracy !== undefined && Number(accuracy) > 150) {
                 return res.status(403).json({
                     success: false,
-                    message: "Low GPS accuracy detected",
+                    message: "Low GPS accuracy detected. Please try again.",
                 });
             }
+
+            verifiedBy = "location";
+
+        } else {
+            // isOfflinePunch = true, not on office network → allow (offline sync)
+            verifiedBy = "offline";
         }
 
         // ─────────────────────────────────────────────
@@ -427,6 +465,8 @@ const punchIn = async (req, res) => {
                 syncedAt: isOfflinePunch
                     ? serverNow.toDate()
                     : null,
+                verifiedBy,        // ← "ip" | "location" | "offline"
+                clientIP,          // ← for audit logs
             });
 
         } catch (err) {
@@ -470,6 +510,18 @@ const punchIn = async (req, res) => {
         // HR / MANAGER NOTIFICATIONS
         // ─────────────────────────────────────────────
         const io = req.app.get("io");
+
+        // ─────────────────────────────────────────────
+        // START DESKTOP TRACKER
+        // ─────────────────────────────────────────────
+
+        io.to(userId.toString()).emit(
+            "tracker:start",
+            {
+                attendanceId: attendance._id,
+                timestamp: new Date(),
+            }
+        );
 
         const employeeName =
             req.user.name || "An employee";
@@ -847,6 +899,18 @@ const punchOut = async (req, res) => {
         // ─────────────────────────────────────────────
         const io = req.app.get("io");
 
+        // ─────────────────────────────────────────────
+        // STOP DESKTOP TRACKER
+        // ─────────────────────────────────────────────
+
+        io.to(userId.toString()).emit(
+            "tracker:stop",
+            {
+                attendanceId: attendance._id,
+                timestamp: new Date(),
+            }
+        );
+
         const employeeName =
             req.user.name || "An employee";
 
@@ -1183,7 +1247,7 @@ const getTeamAttendance = async (req, res) => {
 
         // Get all employees under this TL
         const teamMembers = await User.find({ reportingTo: tlId })
-            .select("name employeeId department designation avatar status joiningDate");
+            .select("name employeeId department designation avatar status joiningDate shift");
 
         if (!teamMembers.length) {
             return res.json({ success: true, data: [], teamMembers: [], message: "No team members assigned" });
@@ -1216,9 +1280,14 @@ const getTeamAttendance = async (req, res) => {
         const todayIST = moment().tz("Asia/Kolkata");
         const todayString = todayIST.format("YYYY-MM-DD");
 
+        const yesterdayString = todayIST.clone().subtract(1, "day").format("YYYY-MM-DD");
+
         const todayRecords = await Attendance.find({
             user: { $in: teamIds },
-            dateString: todayString,
+            $or: [
+                { dateString: todayString },
+                { dateString: yesterdayString, punchOut: null }, // overnight / late-shift
+            ],
         }).populate("user", "name employeeId department");
 
         // Keep `today` as a JS Date for leave-range comparisons below
@@ -1248,9 +1317,10 @@ const getTeamAttendance = async (req, res) => {
             let attendanceStatus = "absent";
             if (isHolidayToday) attendanceStatus = "holiday";
             else if (onLeave) attendanceStatus = "on_leave";
-            else if (rec?.punchIn && rec?.punchOut) attendanceStatus = rec.isHalfDay ? "half_day" : "present";
+            else if (rec?.punchIn && rec?.punchOut) attendanceStatus = "punched_out";
             else if (rec?.punchIn && !rec?.punchOut) attendanceStatus = "punched_in";
-            else if (rec?.status === "absent") attendanceStatus = "absent";
+            else if (rec?.punchIn) attendanceStatus = "punched_in";
+            else attendanceStatus = "absent";
 
             return {
                 _id: member._id,
@@ -1266,7 +1336,14 @@ const getTeamAttendance = async (req, res) => {
                 isLate: rec?.isLate || false,
                 isHalfDay: rec?.isHalfDay || false,
                 lateMinutes: rec?.lateMinutes || 0,
-                missedPunchOut: rec?.punchIn && !rec?.punchOut && todayIST.hour() >= 19,
+                missedPunchOut: (() => {
+                    const empSc = getShiftConfig(member.shift);
+                    const nowMins = todayIST.hour() * 60 + todayIST.minute();
+                    // Treat midnight (0) as 1440 so shifts ending at 00:00 don't fire all day
+                    const shiftEndMins = empSc.shiftEnd === 0 ? 1440 : empSc.shiftEnd;
+                    return !!(rec?.punchIn && !rec?.punchOut && !onLeave &&
+                        nowMins > shiftEndMins + 30);
+                })(),
                 onLeave,
             };
         });
@@ -1380,7 +1457,7 @@ const getHRAttendanceOverview = async (req, res) => {
         const allEmployees = await User.find({
             role: { $in: ["employee", "tl"] },
             status: "active",
-        }).select("name employeeId department designation role joiningDate reportingTo");
+        }).select("name employeeId department designation role joiningDate reportingTo shift");
 
         const allIds = allEmployees.map(e => e._id);
 
@@ -1406,9 +1483,15 @@ const getHRAttendanceOverview = async (req, res) => {
         const todayIST = moment().tz("Asia/Kolkata");
         const todayString = todayIST.format("YYYY-MM-DD");
 
+        // Also catch records from yesterday that have no punch-out yet (overnight shifts)
+        const yesterdayString = todayIST.clone().subtract(1, "day").format("YYYY-MM-DD");
+
         const todayRecords = await Attendance.find({
             user: { $in: allIds },
-            dateString: todayString,
+            $or: [
+                { dateString: todayString },
+                { dateString: yesterdayString, punchOut: null }, // overnight / late-shift
+            ],
         }).populate("user", "name employeeId department designation role");
 
         // Keep `today` as a JS Date for leave-range comparisons below
@@ -1435,9 +1518,21 @@ const getHRAttendanceOverview = async (req, res) => {
             let attendanceStatus = "absent";
             if (isHolidayToday) attendanceStatus = "holiday";
             else if (onLeave) attendanceStatus = "on_leave";
-            else if (rec?.punchIn && rec?.punchOut) attendanceStatus = rec.isHalfDay ? "half_day" : "present";
+            else if (rec?.punchIn && rec?.punchOut) attendanceStatus = "punched_out";
             else if (rec?.punchIn && !rec?.punchOut) attendanceStatus = "punched_in";
+            else if (rec?.punchIn) attendanceStatus = "punched_in";
             else attendanceStatus = "absent";
+
+            // Derive shift end for this specific employee
+            const empShiftConfig = getShiftConfig(emp.shift);
+            const shiftEndHour = Math.floor(empShiftConfig.shiftEnd / 60);
+            const shiftEndMinute = empShiftConfig.shiftEnd % 60;
+            const nowTotalMinutes = todayIST.hour() * 60 + todayIST.minute();
+            // Treat midnight (0) as 1440 so shifts ending at 00:00 don't fire all day
+            const shiftEndTotalMinutes = empShiftConfig.shiftEnd === 0 ? 1440 : empShiftConfig.shiftEnd;
+            // Only flag missed punch-out if current time is 30+ mins past their shift end
+            const missedPunchOut = !!(rec?.punchIn && !rec?.punchOut && !onLeave &&
+                nowTotalMinutes > shiftEndTotalMinutes + 30);
 
             return {
                 _id: emp._id,
@@ -1453,9 +1548,11 @@ const getHRAttendanceOverview = async (req, res) => {
                 isLate: rec?.isLate || false,
                 isHalfDay: rec?.isHalfDay || false,
                 lateMinutes: rec?.lateMinutes || 0,
-                missedPunchOut: rec?.punchIn && !rec?.punchOut && todayIST.hour() >= 19,
+                missedPunchOut,
                 onLeave,
                 leaveType: onLeave ? onLeaveToday.find(l => l.user._id.toString() === emp._id.toString())?.type : null,
+                shiftEndHour,
+                shiftEndMinute,
             };
         });
 
@@ -1508,7 +1605,7 @@ const getHRAttendanceOverview = async (req, res) => {
 
         // ── Overall today counts ────────────────────────
         const totalActive = allEmployees.length;
-        const punchedIn = todaySummary.filter(e => e.attendanceStatus === "punched_in" || e.attendanceStatus === "present" || e.attendanceStatus === "half_day").length;
+        const punchedIn = todaySummary.filter(e => e.attendanceStatus === "punched_in").length;
         const punchedOut = todaySummary.filter(e => e.punchOut).length;
         const absentToday = todaySummary.filter(e => e.attendanceStatus === "absent").length;
         const onLeaveTodayCount = todaySummary.filter(e => e.attendanceStatus === "on_leave").length;

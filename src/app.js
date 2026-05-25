@@ -30,9 +30,17 @@ const DailyReportRoutes = require("./routes/dailyReports.routes");
 const AssetsRoutes = require("./routes/assetRoutes");
 const PolicyRoutes = require("./routes/policy.routes");
 
+//tracker router ------------------------
+const activityMonitorRoutes = require("./routes/activityMonitor.routes");
 
 const app = express();
 const server = http.createServer(app);
+
+if (process.env.NODE_ENV === "production") {
+    app.set("trust proxy", "127.0.0.1");
+} else {
+    app.set("trust proxy", true);
+}
 
 // 🔧 Middleware
 app.use(cors({
@@ -40,23 +48,23 @@ app.use(cors({
     credentials: true,
 }));
 
-app.use(express.json({ limit: "20mb" }));
-app.use(express.urlencoded({ limit: "20mb", extended: true }));
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ limit: "50mb", extended: true }));
 app.use("/uploads", express.static("uploads"));
 
-// ⚡ SOCKET.IO SETUP
 const io = new Server(server, {
     cors: {
         origin: [
-            "http://localhost:5173",
-            "http://localhost:5174",
-            // "https://wwlhrms.digitalwebguider.com"
+            // "http://localhost:5173",
+            // "http://localhost:5174",
+            "https://wwlhrms.digitalwebguider.com",
+            "https://hrmsback.digitalwebguider.com",
         ],
         methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
         credentials: true,
     },
     transports: ["websocket", "polling"],
-})
+});
 
 // 🔐 SOCKET AUTH
 io.use((socket, next) => {
@@ -75,15 +83,26 @@ io.use((socket, next) => {
     }
 });
 
-// 🎯 SOCKET CONNECTION
 io.on("connection", (socket) => {
+    // Log full decoded token to see exact fields
     console.log("User connected:", socket.id);
-
-    // Auto join user room
-    if (socket.user?.id) {
-        socket.join(socket.user.id);
-        console.log("User joined room:", socket.user.id);
+    const uid = socket.user?.id || socket.user?._id;
+    if (uid) {
+        socket.join(`user_${uid}`);
     }
+
+    // HR/Admin joins hr_room to receive capture:done + live activity updates
+    const allowedRoles = ["hr", "admin", "manager", "superadmin"];
+    if (allowedRoles.includes(socket.user?.role)) {
+        socket.join("hr_room");
+    }
+
+    // Also support manual join from frontend
+    socket.on("join:hr_room", () => {
+        if (allowedRoles.includes(socket.user?.role)) {
+            socket.join("hr_room");
+        }
+    });
 
     socket.on("disconnect", () => {
         console.log("User disconnected:", socket.id);
@@ -120,6 +139,9 @@ app.use("/api/hr-ai", HRAIRoutes);
 app.use("/api", DailyReportRoutes);
 app.use("/api/assets", AssetsRoutes);
 app.use("/api/policies", PolicyRoutes);
+
+// -------------------------tracker route ------------------------------------
+app.use("/api/activity-monitor", activityMonitorRoutes);
 
 // ✅ EXPORT (IMPORTANT)
 module.exports = { app, server };

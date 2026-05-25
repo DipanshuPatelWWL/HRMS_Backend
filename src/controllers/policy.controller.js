@@ -119,7 +119,6 @@ exports.getAllPolicies = async (req, res) => {
                 stats: {
                     total: acks.length,
                     acknowledged: acks.filter(a => a.status === "acknowledged").length,
-                    declined: acks.filter(a => a.status === "declined").length,
                     pending: acks.filter(a => a.status === "pending").length,
                 },
             };
@@ -236,30 +235,6 @@ exports.acknowledgePolicies = async (req, res) => {
         }));
 
         res.json({ success: true, message: "Acknowledged successfully" });
-    } catch (err) {
-        res.status(500).json({ success: false, message: err.message });
-    }
-};
-
-// ── EMPLOYEE: decline one policy with reason ──────────────────
-exports.declinePolicy = async (req, res) => {
-    try {
-        const userId = req.user.id;
-        const { policyId } = req.params;
-        const { reason } = req.body;
-
-        await Policy.updateOne(
-            { _id: policyId, "acknowledgements.employee": userId },
-            {
-                $set: {
-                    "acknowledgements.$.status": "declined",
-                    "acknowledgements.$.declineReason": reason ?? "",
-                    "acknowledgements.$.respondedAt": new Date(),
-                },
-            }
-        );
-
-        res.json({ success: true, message: "Response recorded" });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }

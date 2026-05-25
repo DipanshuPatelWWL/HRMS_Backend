@@ -11,24 +11,26 @@ const moment = require("moment-timezone");
 //  (excludes weekends and holidays)
 // ─────────────────────────────────────────────
 const countWorkingDays = async (fromDate, toDate) => {
-    const start = new Date(fromDate);
-    const end = new Date(toDate);
-    start.setHours(0, 0, 0, 0);
-    end.setHours(23, 59, 59, 999);
+    const start = moment.tz(fromDate, "Asia/Kolkata").startOf("day");
+    const end = moment.tz(toDate, "Asia/Kolkata").endOf("day");
 
-    const holidays = await Holiday.find({ date: { $gte: start, $lte: end } });
-    const holidayDates = holidays.map(h => {
-        const d = new Date(h.date);
-        d.setHours(0, 0, 0, 0);
-        return d.getTime();
+    const holidays = await Holiday.find({
+        date: { $gte: start.toDate(), $lte: end.toDate() }
     });
+    const holidayDates = new Set(
+        holidays.map(h =>
+            moment(h.date).tz("Asia/Kolkata").format("YYYY-MM-DD")
+        )
+    );
 
     let count = 0;
-    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-        const day = d.getDay();
+    const cursor = start.clone().startOf("day");
+    while (cursor.isSameOrBefore(end, "day")) {
+        const day = cursor.day();
         const isWeekend = day === 0 || day === 6;
-        const isHoliday = holidayDates.includes(new Date(d).setHours(0, 0, 0, 0));
+        const isHoliday = holidayDates.has(cursor.format("YYYY-MM-DD"));
         if (!isWeekend && !isHoliday) count++;
+        cursor.add(1, "day");
     }
 
     return count;
@@ -90,10 +92,8 @@ const applyLeave = async (req, res) => {
             });
         }
 
-        const from = new Date(fromDate);
-        const to = new Date(toDate);
-        from.setHours(0, 0, 0, 0);
-        to.setHours(23, 59, 59, 999);
+        const from = moment.tz(fromDate, "YYYY-MM-DD", "Asia/Kolkata").startOf("day").toDate();
+        const to = moment.tz(toDate, "YYYY-MM-DD", "Asia/Kolkata").endOf("day").toDate();
 
         if (from > to) {
             return res.status(400).json({
@@ -103,8 +103,7 @@ const applyLeave = async (req, res) => {
         }
 
         // ── Block past-date leave applications ────
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
+        const today = moment.tz("Asia/Kolkata").startOf("day").toDate();
 
         if (from < today) {
             return res.status(400).json({

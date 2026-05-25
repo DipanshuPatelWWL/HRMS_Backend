@@ -99,6 +99,16 @@ const attendanceSchema = new mongoose.Schema(
             type: Boolean,
             default: false,
         },
+        verifiedBy: {
+            type: String,
+            enum: ["ip", "location", "offline"],
+            default: "location",
+        },
+
+        clientIP: {
+            type: String,
+            default: "",
+        },
         syncedAt: {
             type: Date,
             default: null,

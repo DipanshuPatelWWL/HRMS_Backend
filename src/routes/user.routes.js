@@ -25,6 +25,8 @@ const {
     updateBankDetails,
     getAllTLs,
     assignTeamToTL,
+    getEmployeesByTL,
+    unassignEmployeeFromTL,
     getSalesUsers,
     uploadEmployeeDocument,
     getEmployeeDocuments,
@@ -61,6 +63,8 @@ router.post(
 // ─── Static named routes (must be before /:id) ───────────────────────────────
 router.get("/tls", protect, allowRoles("hr", "manager", "superadmin"), getAllTLs);
 router.patch("/assign-team", protect, allowRoles("hr", "manager", "superadmin"), assignTeamToTL);
+router.patch("/unassign-employee", protect, allowRoles("hr", "manager", "superadmin"), unassignEmployeeFromTL);
+router.get("/tl/:tlId/employees", protect, allowRoles("hr", "manager", "superadmin"), getEmployeesByTL);
 router.put("/bulk-shift", protect, allowRoles("hr", "manager", "superadmin"), bulkUpdateShift);
 
 

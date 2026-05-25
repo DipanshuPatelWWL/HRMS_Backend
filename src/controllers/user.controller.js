@@ -12,9 +12,9 @@ const generateEmployeeId = async () => {
 
     const lastUser = await User.findOne({
         employeeId: new RegExp(`^${COMPANY_PREFIX}\\d+$`),
-    }).sort({ createdAt: -1 });
+    }).sort({ employeeId: -1 });
 
-    let number = 119; // Default start since WWL118 already exists
+    let number = 119;
     if (lastUser) {
         const lastNumber = parseInt(lastUser.employeeId.replace(COMPANY_PREFIX, ""));
         if (!isNaN(lastNumber)) number = lastNumber + 1;
@@ -84,7 +84,7 @@ const createUserByHR = async (req, res) => {
 
         // Parse joining date at noon IST to avoid UTC day-shift
         const parsedJoiningDate = req.body.joiningDate
-            ? new Date(req.body.joiningDate + "T12:00:00+05:30")
+            ? new Date(new Date(req.body.joiningDate + "T12:00:00+05:30").toLocaleString("en-US", { timeZone: "Asia/Kolkata" }))
             : new Date();
 
         const user = await User.create({
@@ -233,6 +233,54 @@ const getSingleUser = async (req, res) => {
     }
 };
 
+
+// ─────────────────────────────────────────────
+//  GET EMPLOYEES BY TL
+//  GET /users/tl/:tlId/employees
+// ─────────────────────────────────────────────
+const getEmployeesByTL = async (req, res) => {
+    try {
+        const { tlId } = req.params;
+
+        const tl = await User.findById(tlId);
+        if (!tl || tl.role !== "tl") {
+            return res.status(400).json({ success: false, message: "Invalid TL id" });
+        }
+
+        const employees = await User.find({ reportingTo: tlId })
+            .select("_id name employeeId department designation reportingTo");
+
+        res.status(200).json({ success: true, employees });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ─────────────────────────────────────────────
+//  UNASSIGN EMPLOYEE FROM TL
+//  PATCH /users/unassign-employee
+//  body: { employeeId: "..." }
+// ─────────────────────────────────────────────
+const unassignEmployeeFromTL = async (req, res) => {
+    try {
+        const { employeeId } = req.body;
+
+        if (!employeeId) {
+            return res.status(400).json({ success: false, message: "employeeId is required" });
+        }
+
+        const employee = await User.findById(employeeId);
+        if (!employee) {
+            return res.status(404).json({ success: false, message: "Employee not found" });
+        }
+
+        await User.findByIdAndUpdate(employeeId, { $unset: { reportingTo: "" } });
+
+        res.status(200).json({ success: true, message: `${employee.name} unassigned successfully` });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 // ─────────────────────────────────────────────
 //  UPDATE USER (HR)
@@ -1091,6 +1139,8 @@ module.exports = {
     getAllUsers,
     getAllTLs,
     assignTeamToTL,
+    getEmployeesByTL,
+    unassignEmployeeFromTL,
     getSingleUser,
     updateUser,
     deleteUser,

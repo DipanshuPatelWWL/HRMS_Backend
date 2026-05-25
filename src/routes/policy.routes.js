@@ -3,8 +3,9 @@ const router = express.Router();
 const {
     createPolicy, publishPolicy, updatePolicy, getAllPolicies,
     getPolicyResponses, archivePolicy, restorePolicy, deletePolicy,
-    getMyPolicies, getPolicyById, acknowledgePolicies, declinePolicy,
+    getMyPolicies, getPolicyById, acknowledgePolicies,
 } = require("../controllers/policy.controller");
+
 const protect = require("../middleware/auth.middleware");
 const allowRoles = require("../middleware/role.middleware");
 
@@ -24,7 +25,6 @@ router.patch("/:policyId/archive", protect, allowRoles("hr", "manager"), archive
 router.patch("/:policyId/restore", protect, allowRoles("hr", "manager"), restorePolicy);
 router.delete("/:policyId", protect, allowRoles("hr", "manager"), deletePolicy);
 router.put("/:policyId", protect, allowRoles("hr", "manager"), updatePolicy);
-router.post("/:policyId/decline", protect, declinePolicy);
 router.get("/:policyId", protect, getPolicyById);
 
 module.exports = router;

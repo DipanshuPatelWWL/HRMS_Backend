@@ -42,7 +42,7 @@ const {
 router.post(
     "/createLead",
     protect,
-    allowRoles("employee"),
+    allowRoles("employee", "tl"),
     allowDepartment("Sales"),
     createLead
 );
@@ -51,7 +51,7 @@ router.post(
 router.put(
     "/updateLead/:id",
     protect,
-    allowRoles("employee"),
+    allowRoles("employee", "tl"),
     allowDepartment("Sales"),
     updateLead
 );
@@ -60,7 +60,7 @@ router.put(
 router.post(
     "/sendToManager/:id",
     protect,
-    allowRoles("employee"),
+    allowRoles("employee", "tl"),
     allowDepartment("Sales"),
     sendToManager
 );
@@ -69,7 +69,7 @@ router.post(
 router.get(
     "/getMyLeads",
     protect,
-    allowRoles("employee"),
+    allowRoles("employee", "tl"),
     allowDepartment("Sales"),
     getMyLeads
 );
@@ -107,7 +107,7 @@ router.post(
 router.get(
     "/assignedLeads",
     protect,
-    allowRoles("employee"),
+    allowRoles("employee", "tl"),
     getAssignedLeads
 );
 
