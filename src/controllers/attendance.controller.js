@@ -23,7 +23,7 @@ const OFFICE_SUBNETS = process.env.OFFICE_SUBNETS
 
 const ALLOWED_DEVICES = [
     {
-        deviceUUID: "366290E3-BD5F-4B9B-85E3-BB52AB3CA3D7",
+        deviceUUID: "4C4C4544-0032-4D10-8043-B4C04F504C32",
         productId: "00342-50786-03990-AAOEM",
         label: "Dipanshu Office PC",
     },
