@@ -172,14 +172,14 @@ const punchIn = async (req, res) => {
         // ─────────────────────────────────────────────
         // OFFICE TIMING CHECK
         // ─────────────────────────────────────────────
-        const hour = now.hour();
+        // const hour = now.hour();
 
-        if (hour < 9 || hour >= 21) {
-            return res.status(400).json({
-                success: false,
-                message: "Punch allowed only between 9 AM to 9 PM",
-            });
-        }
+        // if (hour < 9 || hour >= 21) {
+        //     return res.status(400).json({
+        //         success: false,
+        //         message: "Punch allowed only between 9 AM to 9 PM",
+        //     });
+        // }
 
         // ─────────────────────────────────────────────
         // WEEKEND CHECK
@@ -235,76 +235,95 @@ const punchIn = async (req, res) => {
         // ─────────────────────────────────────────────
         // GET CLIENT IP — spoof protected
         // ─────────────────────────────────────────────
-        const rawForwardedFor = req.headers["x-forwarded-for"];
-        const socketIP = req.socket.remoteAddress || "";
+        // const rawForwardedFor = req.headers["x-forwarded-for"];
+        // const socketIP = req.socket.remoteAddress || "";
 
         // In production: only trust x-forwarded-for if request
         // actually came through our Nginx (socketIP is localhost)
-        const isFromNginx =
-            socketIP === "127.0.0.1" ||
-            socketIP === "::1" ||
-            socketIP === "::ffff:127.0.0.1";
+        // const isFromNginx =
+        //     socketIP === "127.0.0.1" ||
+        //     socketIP === "::1" ||
+        //     socketIP === "::ffff:127.0.0.1";
 
-        const clientIP =
-            (process.env.NODE_ENV === "production" && isFromNginx && rawForwardedFor)
-                ? rawForwardedFor.split(",")[0].trim()
-                : (process.env.NODE_ENV !== "production" && rawForwardedFor)
-                    ? rawForwardedFor.split(",")[0].trim()
-                    : socketIP;
-
-
-        const normalizedIP = clientIP
-            .replace(/^::ffff:/, "")
-            .replace(/^::1$/, "127.0.0.1");
+        // const clientIP =
+        //     (process.env.NODE_ENV === "production" && isFromNginx && rawForwardedFor)
+        //         ? rawForwardedFor.split(",")[0].trim()
+        //         : (process.env.NODE_ENV !== "production" && rawForwardedFor)
+        //             ? rawForwardedFor.split(",")[0].trim()
+        //             : socketIP;
 
 
-        const isOfficeNetwork = OFFICE_SUBNETS.some(subnet => normalizedIP.startsWith(subnet));
+        // const normalizedIP = clientIP
+        //     .replace(/^::ffff:/, "")
+        //     .replace(/^::1$/, "127.0.0.1");
 
-        let verifiedBy = null;
+        // ─── DEBUG BLOCK 1 ───────────────────────────────────
+        // console.log("🔍 IP DEBUG:", {
+        //     rawForwardedFor,
+        //     socketIP,
+        //     clientIP,
+        //     normalizedIP,
+        //     isOfficeNetwork: OFFICE_SUBNETS.some(subnet => normalizedIP.startsWith(subnet)),
+        //     OFFICE_SUBNETS,
+        //     NODE_ENV: process.env.NODE_ENV,
+        //     isFromNginx,
+        // });
 
-        if (isOfficeNetwork) {
-            // ✅ On office network (PC / Laptop on office WiFi) → allow directly
-            verifiedBy = "ip";
+        // const isOfficeNetwork = OFFICE_SUBNETS.some(subnet => normalizedIP.startsWith(subnet));
 
-        } else if (!isOfflinePunch) {
-            // ✅ Not on office network → verify by GPS
+        // let verifiedBy = null;
 
-            if (lat === undefined || lat === null || lng === undefined || lng === null) {
-                return res.status(400).json({
-                    success: false,
-                    message: "You are not on office network. Please enable GPS to punch in.",
-                });
-            }
+        // ─── DEBUG BLOCK 2 ───────────────────────────────────
+        // console.log("✅ VERIFICATION RESULT:", {
+        //     verifiedBy,
+        //     isOfficeNetwork,
+        //     hasLatLng: lat !== undefined && lng !== undefined,
+        //     isOfflinePunch,
+        // });
 
-            if (isNaN(Number(lat)) || isNaN(Number(lng))) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Invalid location coordinates received.",
-                });
-            }
+        // if (isOfficeNetwork) {
+        //     // ✅ On office network (PC / Laptop on office WiFi) → allow directly
+        //     verifiedBy = "ip";
+        //}
+        // else if (!isOfflinePunch) {
+        //     // ✅ Not on office network → verify by GPS
 
-            const dist = getDistance(lat, lng, OFFICE_LAT, OFFICE_LNG);
+        //     if (lat === undefined || lat === null || lng === undefined || lng === null) {
+        //         return res.status(400).json({
+        //             success: false,
+        //             message: "You are not on office network. Please enable GPS to punch in.",
+        //         });
+        //     }
 
-            if (dist > GEOFENCE_RADIUS) {
-                return res.status(403).json({
-                    success: false,
-                    message: `Office network not detected and you are ${Math.round(dist)}m away from office.`,
-                });
-            }
+        //     if (isNaN(Number(lat)) || isNaN(Number(lng))) {
+        //         return res.status(400).json({
+        //             success: false,
+        //             message: "Invalid location coordinates received.",
+        //         });
+        //     }
 
-            if (accuracy !== undefined && Number(accuracy) > 150) {
-                return res.status(403).json({
-                    success: false,
-                    message: "Low GPS accuracy detected. Please try again.",
-                });
-            }
+        //     const dist = getDistance(lat, lng, OFFICE_LAT, OFFICE_LNG);
 
-            verifiedBy = "location";
+        //     if (dist > GEOFENCE_RADIUS) {
+        //         return res.status(403).json({
+        //             success: false,
+        //             message: `Office network not detected and you are ${Math.round(dist)}m away from office.`,
+        //         });
+        //     }
 
-        } else {
-            // isOfflinePunch = true, not on office network → allow (offline sync)
-            verifiedBy = "offline";
-        }
+        //     if (accuracy !== undefined && Number(accuracy) > 150) {
+        //         return res.status(403).json({
+        //             success: false,
+        //             message: "Low GPS accuracy detected. Please try again.",
+        //         });
+        //     }
+
+        //     verifiedBy = "location";
+
+        // } else {
+        //     // isOfflinePunch = true, not on office network → allow (offline sync)
+        //     verifiedBy = "offline";
+        // }
 
         // ─────────────────────────────────────────────
         // DUPLICATE CHECK
@@ -445,6 +464,10 @@ const punchIn = async (req, res) => {
                 status = "half-day";
             }
 
+            const verifiedBy = null;
+            const clientIP = null;
+
+
             attendance = await Attendance.create({
                 user: userId,
                 date: todayStart,
@@ -481,7 +504,6 @@ const punchIn = async (req, res) => {
 
             throw err;
         }
-
         // ─────────────────────────────────────────────
         // EMAIL ALERT
         // ─────────────────────────────────────────────
