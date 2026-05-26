@@ -70,8 +70,8 @@ const io = new Server(server, {
             const allowed = [
                 "https://wwlhrms.digitalwebguider.com",
                 "https://hrmsback.digitalwebguider.com",
-                "http://localhost:5173",
-                "http://localhost:5174",
+                // "http://localhost:5173",
+                // "http://localhost:5174",
             ];
             // Allow Electron agent (no origin) and listed URLs
             if (!origin || allowed.includes(origin)) {
@@ -92,9 +92,9 @@ io.use((socket, next) => {
         const token = socket.handshake.auth?.token;
 
         if (!token) {
+            console.log("Socket rejected: No token");
             return next(new Error("Unauthorized: No token"));
         }
-
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
         socket.user = decoded;
         next();

@@ -57,6 +57,11 @@ const ALLOWED_DEVICES = [
         productId: "00331-10000-00001-AA611",
         label: "Hemant Office PC",
     },
+    {
+        deviceUUID: "4C4C4544-0032-4D10-8043-B4C04F504C32",
+        productId: "00342-50786-03990-AAOEM",
+        label: "Dipanshu Office PC",
+    },
 ];
 
 // ─────────────────────────────────────────────
@@ -322,8 +327,6 @@ const punchIn = async (req, res) => {
                 });
 
                 if (matchedDevice) {
-                    // ✅ Known office machine — allow directly
-                    console.log(`✅ Device verified: ${matchedDevice.label}`);
                     verifiedBy = "device";
                     deviceMatched = true;
                 } else {
@@ -333,8 +336,6 @@ const punchIn = async (req, res) => {
 
             // ── STEP 2: Device not matched → try location ────────────────
             if (!deviceMatched) {
-                console.log("Device not matched — falling back to location verification");
-
                 if (lat === undefined || lat === null || lng === undefined || lng === null) {
                     return res.status(403).json({
                         success: false,
@@ -350,7 +351,6 @@ const punchIn = async (req, res) => {
                 }
 
                 const dist = getDistance(Number(lat), Number(lng), OFFICE_LAT, OFFICE_LNG);
-                console.log(`📍 Distance from office: ${Math.round(dist)}m`);
 
                 if (dist > GEOFENCE_RADIUS) {
                     return res.status(403).json({
@@ -365,8 +365,6 @@ const punchIn = async (req, res) => {
                         message: "GPS accuracy is too low. Please try again in open space.",
                     });
                 }
-
-                console.log("✅ Location verified");
                 verifiedBy = "location";
             }
         }
@@ -577,7 +575,7 @@ const punchIn = async (req, res) => {
         // START DESKTOP TRACKER
         // ─────────────────────────────────────────────
 
-        io.to(userId.toString()).emit(
+        io.to(`user_${userId}`).emit(
             "tracker:start",
             {
                 attendanceId: attendance._id,
@@ -1008,7 +1006,7 @@ const punchOut = async (req, res) => {
         // STOP DESKTOP TRACKER
         // ─────────────────────────────────────────────
 
-        io.to(userId.toString()).emit(
+        io.to(`user_${userId}`).emit(
             "tracker:stop",
             {
                 attendanceId: attendance._id,
