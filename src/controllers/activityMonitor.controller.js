@@ -619,9 +619,14 @@ const requestCapture = async (req, res) => {
                 console.log(" -", s.id, "rooms:", [...s.rooms]);
             });
 
+            // Emit to both room formats to ensure agent receives it
             io.to(`user_${userId}`).emit("capture:request", {
                 captureId: capture._id.toString(),
             });
+            io.to(userId.toString()).emit("capture:request", {
+                captureId: capture._id.toString(),
+            });
+            console.log(`Capture request emitted to user_${userId} and ${userId}`);
         }
 
         return res.status(200).json({

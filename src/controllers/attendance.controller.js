@@ -27,6 +27,26 @@ const ALLOWED_DEVICES = [
         productId: "00331-10000-00001-AA159",
         label: "Bhupendra Office PC",
     },
+    {
+        deviceUUID: "FF9C4A14-678F-6F64-7353-E89C2511E53C",
+        productId: "00331-10000-00001-AA316",
+        label: "Jahid Office PC",
+    },
+    {
+        deviceUUID: "03000200-0400-0500-0006-000700080009",
+        productId: "00331-10000-00001-AA620",
+        label: "Santosh Office PC",
+    },
+    {
+        deviceUUID: "03000200-0400-0500-0006-000700080009",
+        productId: "00330-80000-00000-AA007",
+        label: "Anjali Office PC",
+    },
+    {
+        deviceUUID: "4887AE5F-5804-44C7-B060-C4C6E6ABBD2D",
+        productId: "00342-42699-94841-AAOEM",
+        label: "Ruchi Office PC",
+    },
 ];
 
 // ─────────────────────────────────────────────
