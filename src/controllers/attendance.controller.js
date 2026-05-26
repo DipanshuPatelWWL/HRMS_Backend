@@ -43,9 +43,19 @@ const ALLOWED_DEVICES = [
         label: "Anjali Office PC",
     },
     {
-        deviceUUID: "4887AE5F-5804-44C7-B060-C4C6E6ABBD2D",
-        productId: "00342-42699-94841-AAOEM",
-        label: "Ruchi Office PC",
+        deviceUUID: "03000200-0400-0500-0006-000700080009",
+        productId: "00331-10000-00001-AA351",
+        label: "Rajesh Office PC",
+    },
+    {
+        deviceUUID: "BCCB94D0-B8C8-9A11-A0E7-047C16132135",
+        productId: "00355-79631-62791-AAOEM",
+        label: "Dinkar Office PC",
+    },
+    {
+        deviceUUID: "03000200-0400-0500-0006-000700080009",
+        productId: "00331-10000-00001-AA611",
+        label: "Hemant Office PC",
     },
 ];
 
