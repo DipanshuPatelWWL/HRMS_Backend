@@ -7,6 +7,7 @@ const {
 } = require("./src/cron/celebration.cron");
 const { startLeaveAccrualCron, accrueMonthlyLeave, runYearlyReset } = require("./src/cron/leave.cron");
 // const { startPersonalIntentSeed } = require("./src/cron/seedCompanyKB")
+const { startShiftReminderCron } = require("./src/services/shiftReminder");
 
 const PORT = process.env.PORT || 5000;
 
@@ -19,6 +20,7 @@ const startServer = async () => {
             console.log(`🚀 Server running on port ${PORT}`);
             startLeaveAccrualCron();
             startCelebrationCron();
+            startShiftReminderCron();
             // startPersonalIntentSeed();
         });
     } catch (error) {

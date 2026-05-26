@@ -23,12 +23,10 @@ const OFFICE_SUBNETS = process.env.OFFICE_SUBNETS
 
 const ALLOWED_DEVICES = [
     {
-        deviceUUID: "4C4C4544-0032-4D10-8043-B4C04F504C32",
-        productId: "00342-50786-03990-AAOEM",
-        label: "Dipanshu Office PC",
+        deviceUUID: "03000200-0400-0500-0006-000700080009",
+        productId: "00331-10000-00001-AA159",
+        label: "Bhupendra Office PC",
     },
-    // add more office machines here:
-    // { deviceUUID: "XXXXXXXX-...", productId: "00000-00000-...", label: "Reception PC" },
 ];
 
 // ─────────────────────────────────────────────
@@ -115,17 +113,16 @@ const punchIn = async (req, res) => {
         const userId = req.user._id;
 
         const {
-            lat,
-            lng,
-            accuracy,
             deviceId,
             wifiSSID,
             isOfflinePunch,
             offlineTimestamp,
             deviceUUID,
             productId,
+            lat,
+            lng,
+            accuracy,
         } = req.body || {};
-
         // ─────────────────────────────────────────────
         // INDIA TIMEZONE
         // ─────────────────────────────────────────────
@@ -182,16 +179,38 @@ const punchIn = async (req, res) => {
         const todayString = now.clone().format("YYYY-MM-DD");
 
         // ─────────────────────────────────────────────
-        // OFFICE TIMING CHECK
+        // OFFICE TIMING CHECK (shift-aware)
         // ─────────────────────────────────────────────
-        // const hour = now.hour();
+        // Load shift config early so we can use shiftStart for the timing window.
+        // We re-use userDoc fetched below; fetch it here temporarily.
+        const userDocForTiming = await User.findById(userId).select("shift").lean();
+        const scForTiming = getShiftConfig(userDocForTiming?.shift);
 
-        // if (hour < 9 || hour >= 21) {
-        //     return res.status(400).json({
-        //         success: false,
-        //         message: "Punch allowed only between 9 AM to 9 PM",
-        //     });
-        // }
+        // Allow punch-in from 1 hour before shift start up to 1 hour after shift end.
+        // This handles overnight shifts (e.g. 13:00–01:00) by comparing in total minutes
+        // with wrap-around support.
+        const totalMinutesNow = now.hour() * 60 + now.minute();
+
+        const windowOpen = (scForTiming.shiftStart - 60 + 1440) % 1440;  // 1 hr before start
+        const windowClose = (scForTiming.shiftEnd + 60) % 1440;          // 1 hr after end
+
+        // Overnight window: windowOpen > windowClose (e.g. 720 open, 120 close for 1 PM–1 AM)
+        const inWindow = windowOpen <= windowClose
+            ? totalMinutesNow >= windowOpen && totalMinutesNow <= windowClose
+            : totalMinutesNow >= windowOpen || totalMinutesNow <= windowClose;
+
+        if (!inWindow) {
+            const fmt = (m) => {
+                const h = Math.floor(m / 60) % 24;
+                const min = m % 60;
+                const ap = h >= 12 ? "PM" : "AM";
+                return `${h % 12 || 12}:${String(min).padStart(2, "0")} ${ap}`;
+            };
+            return res.status(400).json({
+                success: false,
+                message: `Punch-in allowed only between ${fmt(windowOpen)} and ${fmt(windowClose)}`,
+            });
+        }
 
         // ─────────────────────────────────────────────
         // WEEKEND CHECK
@@ -258,30 +277,38 @@ const punchIn = async (req, res) => {
         if (isOfflinePunch) {
             verifiedBy = "offline";
 
-        } else if (deviceUUID || productId) {
-            // ── Electron desktop agent sent device identity ──────────────
-            // Normalize incoming values once
-            const incomingUUID = (deviceUUID || "").trim().toUpperCase();
-            const incomingProduct = (productId || "").trim().toUpperCase();
+        } else {
+            // ── STEP 1: Try device verification first ────────────────────
+            let deviceMatched = false;
 
-            // Check against the hardcoded ALLOWED_DEVICES list
-            const matchedDevice = ALLOWED_DEVICES.find(d => {
-                const uuidOk = d.deviceUUID.trim().toUpperCase() === incomingUUID;
-                const productOk = d.productId.trim().toUpperCase() === incomingProduct;
-                return uuidOk && productOk;   // both must match
-            });
+            if (deviceUUID && productId) {
+                const incomingUUID = deviceUUID.trim().toUpperCase();
+                const incomingProduct = productId.trim().toUpperCase();
 
-            if (matchedDevice) {
-                // ✅ Known office machine — no GPS required
-                console.log(`Device verified: ${matchedDevice.label}`);
-                verifiedBy = "device";
+                const matchedDevice = ALLOWED_DEVICES.find(d => {
+                    const uuidOk = d.deviceUUID.trim().toUpperCase() === incomingUUID;
+                    const productOk = d.productId.trim().toUpperCase() === incomingProduct;
+                    return uuidOk && productOk;
+                });
 
-            } else {
-                // ❌ Not in the allowed list → fall back to GPS
+                if (matchedDevice) {
+                    // ✅ Known office machine — allow directly
+                    console.log(`✅ Device verified: ${matchedDevice.label}`);
+                    verifiedBy = "device";
+                    deviceMatched = true;
+                } else {
+                    console.log(`❌ Device not in allowed list — UUID: ${incomingUUID}`);
+                }
+            }
+
+            // ── STEP 2: Device not matched → try location ────────────────
+            if (!deviceMatched) {
+                console.log("Device not matched — falling back to location verification");
+
                 if (lat === undefined || lat === null || lng === undefined || lng === null) {
                     return res.status(403).json({
                         success: false,
-                        message: "This device is not an authorised office machine. Please enable GPS to punch in.",
+                        message: "Device not recognised. Please enable GPS to punch in from your current location.",
                     });
                 }
 
@@ -293,43 +320,25 @@ const punchIn = async (req, res) => {
                 }
 
                 const dist = getDistance(Number(lat), Number(lng), OFFICE_LAT, OFFICE_LNG);
+                console.log(`📍 Distance from office: ${Math.round(dist)}m`);
 
                 if (dist > GEOFENCE_RADIUS) {
                     return res.status(403).json({
                         success: false,
-                        message: `Unauthorised device and you are ${Math.round(dist)}m away from office.`,
+                        message: `You are ${Math.round(dist)}m away from office. Move closer or use an authorised office computer.`,
                     });
                 }
 
                 if (accuracy !== undefined && Number(accuracy) > 150) {
                     return res.status(403).json({
                         success: false,
-                        message: "Low GPS accuracy detected. Please try again.",
+                        message: "GPS accuracy is too low. Please try again in open space.",
                     });
                 }
 
+                console.log("✅ Location verified");
                 verifiedBy = "location";
             }
-
-        } else {
-            // ── Browser / non-Electron — GPS required ───────────────────
-            if (lat === undefined || lat === null || lng === undefined || lng === null) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Please enable GPS to punch in.",
-                });
-            }
-
-            const dist = getDistance(Number(lat), Number(lng), OFFICE_LAT, OFFICE_LNG);
-
-            if (dist > GEOFENCE_RADIUS) {
-                return res.status(403).json({
-                    success: false,
-                    message: `You are ${Math.round(dist)}m away from office.`,
-                });
-            }
-
-            verifiedBy = "location";
         }
 
         // ─────────────────────────────────────────────
@@ -693,14 +702,32 @@ const punchOut = async (req, res) => {
         const todayEnd = now.clone().endOf("day").toDate();
 
         // ─────────────────────────────────────────────
-        // OFFICE TIMING CHECK
+        // OFFICE TIMING CHECK (shift-aware)
         // ─────────────────────────────────────────────
-        const hour = now.hour();
+        // Load shift to compute the allowed punch-out window:
+        // 1 hour before shift start → 1 hour after shift end.
+        const userDocForOutTiming = await User.findById(userId).select("shift").lean();
+        const scForOutTiming = getShiftConfig(userDocForOutTiming?.shift);
 
-        if (hour < 9 || hour >= 21) {
+        const totalMinutesNowOut = now.hour() * 60 + now.minute();
+
+        const outWindowOpen = (scForOutTiming.shiftStart - 60 + 1440) % 1440;
+        const outWindowClose = (scForOutTiming.shiftEnd + 60) % 1440;
+
+        const inOutWindow = outWindowOpen <= outWindowClose
+            ? totalMinutesNowOut >= outWindowOpen && totalMinutesNowOut <= outWindowClose
+            : totalMinutesNowOut >= outWindowOpen || totalMinutesNowOut <= outWindowClose;
+
+        if (!inOutWindow) {
+            const fmt = (m) => {
+                const h = Math.floor(m / 60) % 24;
+                const min = m % 60;
+                const ap = h >= 12 ? "PM" : "AM";
+                return `${h % 12 || 12}:${String(min).padStart(2, "0")} ${ap}`;
+            };
             return res.status(400).json({
                 success: false,
-                message: "Punch-out allowed only between 9 AM to 9 PM",
+                message: `Punch-out allowed only between ${fmt(outWindowOpen)} and ${fmt(outWindowClose)}`,
             });
         }
 
@@ -732,19 +759,44 @@ const punchOut = async (req, res) => {
         }
 
         // ─────────────────────────────────────────────
-        // FIND ATTENDANCE
+        // FIND ATTENDANCE (overnight-shift aware)
         // ─────────────────────────────────────────────
         let attendance = await Attendance.findOne({
             user: userId,
             dateString: todayString,
         });
 
-        if (!attendance) {
+        if (!attendance || attendance.punchOut) {
             const yesterdayString = now.clone().subtract(1, "day").format("YYYY-MM-DD");
-            attendance = await Attendance.findOne({
+            const yesterdayAtt = await Attendance.findOne({
                 user: userId,
                 dateString: yesterdayString,
                 punchOut: null,
+            });
+            if (yesterdayAtt) attendance = yesterdayAtt;
+        }
+
+        if (!attendance || attendance.punchOut) {
+            const twoDaysAgoString = now.clone().subtract(2, "day").format("YYYY-MM-DD");
+            const twoDaysAgoAtt = await Attendance.findOne({
+                user: userId,
+                dateString: twoDaysAgoString,
+                punchOut: null,
+            });
+            if (twoDaysAgoAtt) attendance = twoDaysAgoAtt;
+        }
+
+        if (!attendance) {
+            return res.status(404).json({
+                success: false,
+                message: "No punch-in found for today",
+            });
+        }
+
+        if (attendance.punchOut) {
+            return res.status(400).json({
+                success: false,
+                message: "Already punched out",
             });
         }
 
@@ -1270,7 +1322,7 @@ const getTeamAttendance = async (req, res) => {
 
         // Get all employees under this TL
         const teamMembers = await User.find({ reportingTo: tlId })
-            .select("name employeeId department designation avatar status joiningDate shift");
+            .select("name employeeId department designation avatar status joiningDate createdAt shift");
 
         if (!teamMembers.length) {
             return res.json({ success: true, data: [], teamMembers: [], message: "No team members assigned" });
@@ -1392,11 +1444,18 @@ const getTeamAttendance = async (req, res) => {
             const days = [];
             for (let d = 1; d <= daysInMonth; d++) {
                 const currentDate = new Date(year, month - 1, d);
-                const joiningDate = member.joiningDate ? new Date(new Date(member.joiningDate).setHours(0, 0, 0, 0)) : null;
+                const rawJoining = member.joiningDate ? new Date(member.joiningDate) : null;
+                const rawCreated = member.createdAt ? new Date(member.createdAt) : null;
+                const effectiveJoining = rawJoining && rawCreated
+                    ? new Date(Math.max(rawJoining.getTime(), rawCreated.getTime()))
+                    : rawJoining || rawCreated || null;
+                const joiningDate = effectiveJoining
+                    ? new Date(new Date(effectiveJoining).setHours(0, 0, 0, 0))
+                    : null;
 
                 if (joiningDate && currentDate < joiningDate) {
                     days.push({ day: d, status: "not_joined" });
-                    continue;
+                    continue; // ✅ skip — don't count as absent
                 }
 
                 const rec = memberRecords[d];
@@ -1419,15 +1478,20 @@ const getTeamAttendance = async (req, res) => {
                 if (isFuture) dayStatus = "future";
                 else if (isHoliday) dayStatus = "holiday";
                 else if (weekend) dayStatus = "weekend";
-                else if (onLeave) { dayStatus = "leave"; leaveDays++; }
+                else if (onLeave) { dayStatus = "on_leave"; leaveDays++; }
                 else if (rec) {
-                    if (rec.isHalfDay) { dayStatus = "half_day"; halfDays++; }
+                    if (rec.isHalfDay) { dayStatus = "half_day"; halfDays++; presentDays++; }
                     else if (rec.isLate) { dayStatus = "late"; lateDays++; presentDays++; }
                     else if (rec.status === "present") { dayStatus = "present"; presentDays++; }
                     else { dayStatus = "absent"; absentDays++; }
                 } else {
-                    dayStatus = "absent";
-                    absentDays++;
+                    const isPastWorkingDay = !isFuture && !isHoliday && !weekend;
+                    if (isPastWorkingDay) {
+                        dayStatus = "absent";
+                        absentDays++;
+                    } else {
+                        dayStatus = "absent";
+                    }
                 }
 
                 days.push({ day: d, status: dayStatus, punchIn: rec?.punchIn, punchOut: rec?.punchOut });
@@ -1591,9 +1655,9 @@ const getHRAttendanceOverview = async (req, res) => {
             const empRecords = recordsByUser[uid] || [];
             const empLeaves = leaves.filter(l => l.user._id.toString() === uid);
 
-            const presentDays = empRecords.filter(r => r.status === "present" && !r.isHalfDay).length;
             const halfDays = empRecords.filter(r => r.isHalfDay).length;
-            const lateDays = empRecords.filter(r => r.isLate).length;
+            const presentDays = empRecords.filter(r => !r.isHalfDay && r.status === "present").length;
+            const lateDays = empRecords.filter(r => r.isLate && !r.isHalfDay).length;
             const absentDays = empRecords.filter(r => r.status === "absent").length;
             const leaveDays = empLeaves.reduce((acc, l) => {
                 const from = new Date(l.fromDate);
