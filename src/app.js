@@ -44,7 +44,19 @@ if (process.env.NODE_ENV === "production") {
 
 // 🔧 Middleware
 app.use(cors({
-    origin: "*",
+    origin: (origin, callback) => {
+        const allowed = [
+            "https://wwlhrms.digitalwebguider.com",
+            "https://hrmsback.digitalwebguider.com",
+            "http://localhost:5173",
+            "http://localhost:5174",
+        ];
+        if (!origin || allowed.includes(origin)) {
+            callback(null, true);
+        } else {
+            callback(new Error("Not allowed by CORS"));
+        }
+    },
     credentials: true,
 }));
 
@@ -54,12 +66,20 @@ app.use("/uploads", express.static("uploads"));
 
 const io = new Server(server, {
     cors: {
-        origin: [
-            // "http://localhost:5173",
-            // "http://localhost:5174",
-            "https://wwlhrms.digitalwebguider.com",
-            "https://hrmsback.digitalwebguider.com",
-        ],
+        origin: (origin, callback) => {
+            const allowed = [
+                "https://wwlhrms.digitalwebguider.com",
+                "https://hrmsback.digitalwebguider.com",
+                "http://localhost:5173",
+                "http://localhost:5174",
+            ];
+            // Allow Electron agent (no origin) and listed URLs
+            if (!origin || allowed.includes(origin)) {
+                callback(null, true);
+            } else {
+                callback(new Error("Not allowed by CORS"));
+            }
+        },
         methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
         credentials: true,
     },
@@ -84,28 +104,29 @@ io.use((socket, next) => {
 });
 
 io.on("connection", (socket) => {
-    // Log full decoded token to see exact fields
-    console.log("User connected:", socket.id);
-    const uid = socket.user?.id || socket.user?._id;
+    // DEBUG — log full JWT payload to confirm correct userId field
+    console.log("User connected:", socket.id, "| JWT payload:", JSON.stringify(socket.user));
+
+    const uid = socket.user?.id || socket.user?._id || socket.user?.userId;
     if (uid) {
         socket.join(`user_${uid}`);
+        console.log(`Auto-joined user_${uid}`);
     }
 
-    // HR/Admin joins hr_room to receive capture:done + live activity updates
     const allowedRoles = ["hr", "admin", "manager", "superadmin"];
     if (allowedRoles.includes(socket.user?.role)) {
         socket.join("hr_room");
+        console.log(`Socket ${socket.id} joined hr_room`);
     }
 
-    // Also support manual join from frontend
     socket.on("join:hr_room", () => {
         socket.join("hr_room");
-        console.log(`Socket ${socket.id} joined hr_room`);
+        console.log(`Socket ${socket.id} joined hr_room manually`);
     });
 
     socket.on("join:user_room", ({ userId }) => {
         socket.join(`user_${userId}`);
-        console.log(`Socket ${socket.id} joined user_${userId}`);
+        console.log(`Socket ${socket.id} joined user_${userId} manually`);
     });
 
     socket.on("disconnect", () => {
