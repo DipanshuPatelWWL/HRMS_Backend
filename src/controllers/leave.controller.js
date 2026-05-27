@@ -60,16 +60,24 @@ const finalizeApproval = async (leave) => {
     // ── 2. Deduct leave balance (only once, by final approver)
     const user = await User.findById(leave.user);
 
-    const availableBalance = user.leaveBalance.total;
-    const paidDays = Math.min(availableBalance, leave.totalDays);
+    // ── AFTER (fixed) ──
+    const leaveType = leave.type; // "casual" | "sick" | "earned"
+    const typeBalance = user.leaveBalance?.[leaveType];
+
+    const available = typeBalance
+        ? Math.max(0, typeBalance.total - typeBalance.used)
+        : 0;
+
+    const paidDays = Math.min(available, leave.totalDays);
     const unpaidDays = leave.totalDays - paidDays;
 
     leave.paidDays = paidDays;
     leave.unpaidDays = unpaidDays;
 
-    // user.leaveBalance.total -= paidDays;
-    user.leaveBalance.used += paidDays;
-    await user.save();
+    if (typeBalance && paidDays > 0) {
+        user.leaveBalance[leaveType].used += paidDays;
+        await user.save();
+    }
 };
 
 
@@ -610,7 +618,7 @@ const revokeLeave = async (req, res) => {
             await User.findByIdAndUpdate(leave.user, {
                 $inc: {
                     // "leaveBalance.total": leave.paidDays,
-                    "leaveBalance.used": -leave.paidDays,
+                    [`leaveBalance.${leave.type}.used`]: -leave.paidDays,
                 },
             });
         }
@@ -657,7 +665,7 @@ const deleteLeave = async (req, res) => {
             await User.findByIdAndUpdate(leave.user, {
                 $inc: {
                     // "leaveBalance.total": leave.paidDays,
-                    "leaveBalance.used": -leave.paidDays,
+                    [`leaveBalance.${leave.type}.used`]: -leave.paidDays,
                 },
             });
         }
@@ -676,14 +684,13 @@ const deleteLeave = async (req, res) => {
 
 const getLeaveBalance = async (req, res) => {
     try {
-        const user = await User.findById(req.user._id).select("leaveBalance name employeeId");
-        if (!user) {
-            return res.status(404).json({ success: false, message: "User not found" });
-        }
+        const targetId = req.params.userId || req.user._id;  // ← support HR fetching others
+        const user = await User.findById(targetId).select("leaveBalance name employeeId");
+        if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
         res.json({
             success: true,
-            leaveBalance: user.leaveBalance || { total: 0, used: 0 },
+            leaveBalance: user.leaveBalance,  // ← no fallback to old flat shape
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
