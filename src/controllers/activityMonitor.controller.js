@@ -646,18 +646,21 @@ const requestCapture = async (req, res) => {
 // ─────────────────────────────────────────────
 const uploadCapture = async (req, res) => {
     try {
-        const { captureId, screenshot, webcamPhoto } = req.body;
+        const { captureId, screenshot, webcamPhoto, status } = req.body;
 
         if (!captureId) {
             return res.status(400).json({ success: false, message: "captureId required" });
         }
+
+        // Agent can explicitly signal failure
+        const resolvedStatus = status === "failed" ? "failed" : "completed";
 
         const capture = await CaptureRequest.findByIdAndUpdate(
             captureId,
             {
                 screenshot: screenshot || null,
                 webcamPhoto: webcamPhoto || null,
-                status: "completed",
+                status: resolvedStatus,
                 completedAt: new Date(),
             },
             { new: true }
@@ -667,7 +670,6 @@ const uploadCapture = async (req, res) => {
             return res.status(404).json({ success: false, message: "Capture not found" });
         }
 
-        // Notify HR via socket that images are ready
         const io = req.app.get("io");
         if (io) {
             io.to("hr_room").emit("capture:done", {
@@ -676,10 +678,11 @@ const uploadCapture = async (req, res) => {
                 screenshot: capture.screenshot,
                 webcamPhoto: capture.webcamPhoto,
                 completedAt: capture.completedAt,
+                status: resolvedStatus,   // ← HR frontend can show "failed" state
             });
         }
 
-        return res.status(200).json({ success: true, message: "Capture saved" });
+        return res.status(200).json({ success: true, message: "Capture saved", status: resolvedStatus });
     } catch (error) {
         console.error("uploadCapture Error:", error);
         res.status(500).json({ success: false, message: error.message });

@@ -29,14 +29,24 @@ const HRAIRoutes = require("./routes/hr.ai.routes");
 const DailyReportRoutes = require("./routes/dailyReports.routes");
 const AssetsRoutes = require("./routes/assetRoutes");
 const PolicyRoutes = require("./routes/policy.routes");
+const isProd = process.env.NODE_ENV === "production";
 
 //tracker router ------------------------
 const activityMonitorRoutes = require("./routes/activityMonitor.routes");
 
+const ALLOWED_ORIGINS = isProd
+    ? [
+        "https://wwlhrms.digitalwebguider.com",
+        "https://hrmsback.digitalwebguider.com",
+    ]
+    : [
+        "http://localhost:5173",
+        "http://localhost:5174",
+    ];
+
 const app = express();
 const server = http.createServer(app);
-
-if (process.env.NODE_ENV === "production") {
+if (isProd) {
     app.set("trust proxy", "127.0.0.1");
 } else {
     app.set("trust proxy", true);
@@ -45,13 +55,7 @@ if (process.env.NODE_ENV === "production") {
 // 🔧 Middleware
 app.use(cors({
     origin: (origin, callback) => {
-        const allowed = [
-            "https://wwlhrms.digitalwebguider.com",
-            "https://hrmsback.digitalwebguider.com",
-            "http://localhost:5173",
-            "http://localhost:5174",
-        ];
-        if (!origin || allowed.includes(origin)) {
+        if (!origin || ALLOWED_ORIGINS.includes(origin)) {
             callback(null, true);
         } else {
             callback(new Error("Not allowed by CORS"));
@@ -67,14 +71,7 @@ app.use("/uploads", express.static("uploads"));
 const io = new Server(server, {
     cors: {
         origin: (origin, callback) => {
-            const allowed = [
-                "https://wwlhrms.digitalwebguider.com",
-                "https://hrmsback.digitalwebguider.com",
-                // "http://localhost:5173",
-                // "http://localhost:5174",
-            ];
-            // Allow Electron agent (no origin) and listed URLs
-            if (!origin || allowed.includes(origin)) {
+            if (!origin || ALLOWED_ORIGINS.includes(origin)) {
                 callback(null, true);
             } else {
                 callback(new Error("Not allowed by CORS"));
@@ -84,6 +81,7 @@ const io = new Server(server, {
         credentials: true,
     },
     transports: ["websocket", "polling"],
+    maxHttpBufferSize: 50 * 1024 * 1024,  // ← allow large screenshot payloads via socket
 });
 
 // 🔐 SOCKET AUTH
@@ -104,13 +102,15 @@ io.use((socket, next) => {
 });
 
 io.on("connection", (socket) => {
-    // DEBUG — log full JWT payload to confirm correct userId field
     console.log("User connected:", socket.id, "| JWT payload:", JSON.stringify(socket.user));
 
+    // Auto-join from JWT — covers every field name your JWT might use
     const uid = socket.user?.id || socket.user?._id || socket.user?.userId;
     if (uid) {
-        socket.join(`user_${uid}`);
-        console.log(`Auto-joined user_${uid}`);
+        const uidStr = uid.toString();
+        socket.join(`user_${uidStr}`);   // primary room used by requestCapture
+        socket.join(uidStr);             // fallback room
+        console.log(`Auto-joined user_${uidStr} and ${uidStr}`);
     }
 
     const allowedRoles = ["hr", "admin", "manager", "superadmin"];
@@ -124,9 +124,21 @@ io.on("connection", (socket) => {
         console.log(`Socket ${socket.id} joined hr_room manually`);
     });
 
-    socket.on("join:user_room", ({ userId }) => {
+    // Handle both: { userId: "abc" } object AND plain "abc" string
+    socket.on("join:user_room", (data) => {
+        const userId = (typeof data === "object" ? data?.userId : data)?.toString();
+        if (!userId) return;
         socket.join(`user_${userId}`);
-        console.log(`Socket ${socket.id} joined user_${userId} manually`);
+        socket.join(userId);
+        console.log(`Socket ${socket.id} manually joined user_${userId} and ${userId}`);
+    });
+
+    // Handle plain socket.emit("join", "user_abc") from agent
+    socket.on("join", (room) => {
+        if (typeof room === "string" && room.length < 100) {
+            socket.join(room);
+            console.log(`Socket ${socket.id} joined room: ${room}`);
+        }
     });
 
     socket.on("disconnect", () => {
