@@ -1426,8 +1426,10 @@ const getTeamAttendance = async (req, res) => {
                 attendanceStatus = "punched_out";
             } else if (rec?.punchIn) {
                 const shiftEndMins = empSc.shiftEnd === 0 ? 1440 : empSc.shiftEnd;
-                const shiftOver = nowMins > shiftEndMins + 60;
-                attendanceStatus = shiftOver ? "punched_out" : "punched_in";
+                const punchInMoment = moment(rec.punchIn).tz("Asia/Kolkata");
+                const isPunchInFromYesterday = punchInMoment.format("YYYY-MM-DD") !== todayString;
+                const shiftOver = isPunchInFromYesterday || nowMins > shiftEndMins + 60;
+                attendanceStatus = shiftOver ? "missed_punchout" : "punched_in";
             } else if (onLeave) {
                 attendanceStatus = "on_leave";
             } else if (isHolidayToday) {
@@ -1456,8 +1458,20 @@ const getTeamAttendance = async (req, res) => {
                 isLate: rec?.isLate || false,
                 isHalfDay: rec?.isHalfDay || false,
                 lateMinutes: rec?.lateMinutes || 0,
-                missedPunchOut: !!(rec?.punchIn && !rec?.punchOut && !onLeave &&
-                    nowMins > shiftEndMins + 30),
+                missedPunchOut: (() => {
+                    const punchInMoment = rec?.punchIn ? moment(rec.punchIn).tz("Asia/Kolkata") : null;
+                    const punchInDateString = punchInMoment ? punchInMoment.format("YYYY-MM-DD") : null;
+                    const isPunchInFromYesterday = punchInDateString && punchInDateString !== todayString;
+                    return !!(
+                        rec?.punchIn &&
+                        !rec?.punchOut &&
+                        !onLeave &&
+                        (
+                            (!isPunchInFromYesterday && nowMins > shiftEndMins + 30) ||
+                            isPunchInFromYesterday
+                        )
+                    );
+                })(),
                 onLeave,
             };
         });
@@ -1650,8 +1664,10 @@ const getHRAttendanceOverview = async (req, res) => {
                 attendanceStatus = "punched_out";
             } else if (rec?.punchIn) {
                 const shiftEndMins = empSc.shiftEnd === 0 ? 1440 : empSc.shiftEnd;
-                const shiftOver = nowMins > shiftEndMins + 60;
-                attendanceStatus = shiftOver ? "punched_out" : "punched_in";
+                const punchInMoment = moment(rec.punchIn).tz("Asia/Kolkata");
+                const isPunchInFromYesterday = punchInMoment.format("YYYY-MM-DD") !== todayString;
+                const shiftOver = isPunchInFromYesterday || nowMins > shiftEndMins + 60;
+                attendanceStatus = shiftOver ? "missed_punchout" : "punched_in";
             } else if (onLeave) {
                 attendanceStatus = "on_leave";
             } else if (isHolidayToday) {
@@ -1670,8 +1686,22 @@ const getHRAttendanceOverview = async (req, res) => {
             // Treat midnight (0) as 1440 so shifts ending at 00:00 don't fire all day
             const shiftEndTotalMinutes = empShiftConfig.shiftEnd === 0 ? 1440 : empShiftConfig.shiftEnd;
             // Only flag missed punch-out if current time is 30+ mins past their shift end
-            const missedPunchOut = !!(rec?.punchIn && !rec?.punchOut && !onLeave &&
-                nowTotalMinutes > shiftEndTotalMinutes + 30);
+            // Check missed punch-out accounting for overnight/next-day scenario
+            const punchInMoment = rec?.punchIn ? moment(rec.punchIn).tz("Asia/Kolkata") : null;
+            const punchInDateString = punchInMoment ? punchInMoment.format("YYYY-MM-DD") : null;
+            const isPunchInFromYesterday = punchInDateString && punchInDateString !== todayString;
+
+            const missedPunchOut = !!(
+                rec?.punchIn &&
+                !rec?.punchOut &&
+                !onLeave &&
+                (
+                    // Same day: current time is 30+ mins past their shift end
+                    (!isPunchInFromYesterday && nowMins > shiftEndTotalMinutes + 30) ||
+                    // Previous day punch-in: shift has definitely ended (next day already)
+                    isPunchInFromYesterday
+                )
+            );
 
             return {
                 _id: emp._id,
