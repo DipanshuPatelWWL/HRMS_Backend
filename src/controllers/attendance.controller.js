@@ -1417,13 +1417,28 @@ const getTeamAttendance = async (req, res) => {
             const onLeave = onLeaveTodayIds.has(member._id.toString());
             const isHolidayToday = isWeekend(today) || holidayDates.has(today.getDate());
 
-            // NEW
-            let attendanceStatus = "absent";
-            if (rec?.punchIn && rec?.punchOut) attendanceStatus = "punched_out";
-            else if (rec?.punchIn) attendanceStatus = "punched_in";
-            else if (onLeave) attendanceStatus = "on_leave";
-            else if (isHolidayToday) attendanceStatus = "holiday";
-            else attendanceStatus = "absent";
+            const empSc = getShiftConfig(member.shift);
+            const nowMins = todayIST.hour() * 60 + todayIST.minute();
+            const shiftNotStartedYet = nowMins < empSc.shiftStart;
+
+            let attendanceStatus;
+            if (rec?.punchIn && rec?.punchOut) {
+                attendanceStatus = "punched_out";
+            } else if (rec?.punchIn) {
+                const shiftEndMins = empSc.shiftEnd === 0 ? 1440 : empSc.shiftEnd;
+                const shiftOver = nowMins > shiftEndMins + 60;
+                attendanceStatus = shiftOver ? "punched_out" : "punched_in";
+            } else if (onLeave) {
+                attendanceStatus = "on_leave";
+            } else if (isHolidayToday) {
+                attendanceStatus = "holiday";
+            } else if (shiftNotStartedYet) {
+                attendanceStatus = "not_started";
+            } else {
+                attendanceStatus = "absent";
+            }
+
+            const shiftEndMins = empSc.shiftEnd === 0 ? 1440 : empSc.shiftEnd;
 
             return {
                 _id: member._id,
@@ -1433,20 +1448,16 @@ const getTeamAttendance = async (req, res) => {
                 designation: member.designation,
                 status: member.status,
                 attendanceStatus,
+                shiftStartHour: Math.floor(empSc.shiftStart / 60),
+                shiftStartMinute: empSc.shiftStart % 60,
                 punchIn: rec?.punchIn || null,
                 punchOut: rec?.punchOut || null,
                 workHours: rec?.workHours || null,
                 isLate: rec?.isLate || false,
                 isHalfDay: rec?.isHalfDay || false,
                 lateMinutes: rec?.lateMinutes || 0,
-                missedPunchOut: (() => {
-                    const empSc = getShiftConfig(member.shift);
-                    const nowMins = todayIST.hour() * 60 + todayIST.minute();
-                    // Treat midnight (0) as 1440 so shifts ending at 00:00 don't fire all day
-                    const shiftEndMins = empSc.shiftEnd === 0 ? 1440 : empSc.shiftEnd;
-                    return !!(rec?.punchIn && !rec?.punchOut && !onLeave &&
-                        nowMins > shiftEndMins + 30);
-                })(),
+                missedPunchOut: !!(rec?.punchIn && !rec?.punchOut && !onLeave &&
+                    nowMins > shiftEndMins + 30),
                 onLeave,
             };
         });
@@ -1630,12 +1641,26 @@ const getHRAttendanceOverview = async (req, res) => {
             const rec = todayRecordMap[emp._id.toString()];
             const onLeave = onLeaveTodayIds.has(emp._id.toString());
 
-            let attendanceStatus = "absent";
-            if (rec?.punchIn && rec?.punchOut) attendanceStatus = "punched_out";
-            else if (rec?.punchIn) attendanceStatus = "punched_in";
-            else if (onLeave) attendanceStatus = "on_leave";
-            else if (isHolidayToday) attendanceStatus = "holiday";
-            else attendanceStatus = "absent";
+            const empSc = getShiftConfig(emp.shift);
+            const nowMins = todayIST.hour() * 60 + todayIST.minute();
+            const shiftNotStartedYet = nowMins < empSc.shiftStart;
+
+            let attendanceStatus;
+            if (rec?.punchIn && rec?.punchOut) {
+                attendanceStatus = "punched_out";
+            } else if (rec?.punchIn) {
+                const shiftEndMins = empSc.shiftEnd === 0 ? 1440 : empSc.shiftEnd;
+                const shiftOver = nowMins > shiftEndMins + 60;
+                attendanceStatus = shiftOver ? "punched_out" : "punched_in";
+            } else if (onLeave) {
+                attendanceStatus = "on_leave";
+            } else if (isHolidayToday) {
+                attendanceStatus = "holiday";
+            } else if (shiftNotStartedYet) {
+                attendanceStatus = "not_started";
+            } else {
+                attendanceStatus = "absent";
+            }
 
             // Derive shift end for this specific employee
             const empShiftConfig = getShiftConfig(emp.shift);
@@ -1656,6 +1681,8 @@ const getHRAttendanceOverview = async (req, res) => {
                 designation: emp.designation,
                 role: emp.role,
                 attendanceStatus,
+                shiftStartHour: Math.floor(empSc.shiftStart / 60),
+                shiftStartMinute: empSc.shiftStart % 60,
                 punchIn: rec?.punchIn || null,
                 punchOut: rec?.punchOut || null,
                 workHours: rec?.workHours || null,
@@ -1725,6 +1752,7 @@ const getHRAttendanceOverview = async (req, res) => {
         const onLeaveTodayCount = todaySummary.filter(e => e.attendanceStatus === "on_leave").length;
         const missedPunchOut = todaySummary.filter(e => e.missedPunchOut).length;
         const lateToday = todaySummary.filter(e => e.isLate).length;
+        const officeNotOpenCount = todaySummary.filter(e => e.attendanceStatus === "not_started").length;
 
         res.json({
             success: true,
@@ -1732,6 +1760,7 @@ const getHRAttendanceOverview = async (req, res) => {
                 totalActive, punchedIn, punchedOut,
                 absentToday, onLeaveTodayCount,
                 missedPunchOut, lateToday,
+                officeNotOpenCount,
             },
             todaySummary,
             monthlyStats,
