@@ -205,18 +205,21 @@ exports.getManagerLeads = async (req, res) => {
             priority,
         } = req.query;
 
-        const filter = {
-            is_deleted: false,
-        };
+        const filter = {};
+
+        // If manager explicitly requests deleted leads, show them
+        if (req.query.show_deleted === 'true') {
+            filter.is_deleted = true;
+        } else {
+            filter.is_deleted = false;
+        }
 
         if (review_status) {
             filter.review_status = review_status;
         }
-
         if (lead_stage) {
             filter.lead_stage = lead_stage;
         }
-
         if (priority) {
             filter.priority = priority;
         }
@@ -708,7 +711,6 @@ exports.getLeadTimeline = async (req, res) => {
 
 exports.deleteLead = async (req, res) => {
     try {
-
         const lead = await Lead.findById(req.params.id);
 
         if (!lead) {
@@ -718,8 +720,25 @@ exports.deleteLead = async (req, res) => {
             });
         }
 
+        // Only creator can soft-delete their own lead
+        if (lead.created_by.toString() !== req.user._id.toString()) {
+            return res.status(403).json({
+                success: false,
+                message: "You can only delete your own leads",
+            });
+        }
+
+        // Prevent deleting already-assigned leads
+        if (lead.assigned_to) {
+            return res.status(400).json({
+                success: false,
+                message: "Cannot delete a lead that has already been assigned",
+            });
+        }
+
         lead.is_deleted = true;
         lead.deleted_at = new Date();
+        lead.deleted_by = req.user._id;
 
         addTimeline(
             lead,

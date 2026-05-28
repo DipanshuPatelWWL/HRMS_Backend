@@ -145,6 +145,29 @@ io.on("connection", (socket) => {
         }
     });
 
+    // HR starts watching an employee's live stream
+    socket.on("stream:request", ({ targetUserId }) => {
+        const streamId = `${targetUserId}_${Date.now()}`;
+        // Tell the employee's Electron app to start streaming
+        io.to(`user_${targetUserId}`).emit("stream:start", { streamId });
+        io.to(targetUserId.toString()).emit("stream:start", { streamId });
+        // Confirm to HR with the streamId so they can match frames
+        socket.emit("stream:started", { streamId, targetUserId });
+        console.log(`Stream started: ${streamId}`);
+    });
+
+    // HR stops watching
+    socket.on("stream:stop_request", ({ targetUserId }) => {
+        io.to(`user_${targetUserId}`).emit("stream:stop");
+        io.to(targetUserId.toString()).emit("stream:stop");
+        console.log(`Stream stopped for user: ${targetUserId}`);
+    });
+
+    // Employee Electron app forwards frame → relay to hr_room
+    socket.on("stream:frame", (data) => {
+        io.to("hr_room").emit("stream:frame", data);
+    });
+
     socket.on("disconnect", () => {
         console.log("User disconnected:", socket.id);
     });

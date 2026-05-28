@@ -302,6 +302,23 @@ const userSchema = new mongoose.Schema(
             type: Boolean,
             default: false,
         },
+        sessions: [
+            {
+                sessionId: { type: String, required: true },
+                deviceInfo: { type: String, default: "Unknown Device" },
+                ipAddress: { type: String, default: "" },
+                userAgent: { type: String, default: "" },
+                browser: { type: String, default: "" },
+                browserVersion: { type: String, default: "" },
+                os: { type: String, default: "" },
+                osVersion: { type: String, default: "" },
+                deviceType: { type: String, default: "Desktop" },
+                engine: { type: String, default: "" },
+                platform: { type: String, default: "" },
+                createdAt: { type: Date, default: Date.now },
+                lastActive: { type: Date, default: Date.now },
+            },
+        ],
     },
     {
         timestamps: true,

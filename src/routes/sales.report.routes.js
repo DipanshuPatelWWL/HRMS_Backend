@@ -79,9 +79,16 @@ router.get(
 // MANAGER ROUTES
 // ─────────────────────────────────────────────
 
-// GET ALL LEADS
 router.get(
     "/manager/leads",
+    protect,
+    allowRoles("manager"),
+    getManagerLeads
+);
+
+// GET DELETED LEADS (manager only)
+router.get(
+    "/manager/deleted-leads",
     protect,
     allowRoles("manager"),
     getManagerLeads

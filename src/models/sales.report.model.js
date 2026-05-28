@@ -258,13 +258,17 @@ const salesLeadSchema = new mongoose.Schema(
         // ─────────────────────────────
         // SOFT DELETE
         // ─────────────────────────────
-
         is_deleted: {
             type: Boolean,
             default: false,
         },
 
         deleted_at: Date,
+
+        deleted_by: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
+        },
     },
     {
         timestamps: true,
