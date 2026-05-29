@@ -53,9 +53,14 @@ const attendanceSchema = new mongoose.Schema(
             default: false,
         },
 
+        isShortLeave: {
+            type: Boolean,
+            default: false,
+        },
+
         status: {
             type: String,
-            enum: ["present", "absent", "half-day"],
+            enum: ["present", "absent", "half-day", "short-leave"],
             default: "present",
         },
 

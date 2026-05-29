@@ -42,8 +42,6 @@ const processCelebrations = async () => {
             return;
         }
 
-        console.log(`[CelebrationCron] claimed ${claimResult.modifiedCount} celebration(s)`);
-
         // Now fetch only the ones WE just claimed
         const celebrations = await Celebration.find({
             status: "processing",
@@ -123,13 +121,11 @@ const processCelebrations = async () => {
                     for (const recipient of celebration.recipients) {
                         if (!recipient?.email) continue;
                         await sendCelebrationMail({ to: recipient.email, subject, html });
-                        console.log(`[CelebrationCron] sent to: ${recipient.email}`);
                     }
                 } else {
                     // Fallback — no recipients selected, send to employee only
                     if (employee.email) {
                         await sendCelebrationMail({ to: employee.email, subject, html });
-                        console.log(`[CelebrationCron] fallback sent to employee: ${employee.email}`);
                     }
                 }
 
@@ -140,7 +136,6 @@ const processCelebrations = async () => {
                 celebration.status = "sent";
                 celebration.sentAt = new Date();
                 await celebration.save();
-                console.log(`[CelebrationCron] ✅ done: ${celebration._id}`);
 
             } catch (err) {
 

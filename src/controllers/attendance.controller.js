@@ -78,6 +78,9 @@ const LENIENCY_WORK_HOURS = 8;
 const GRACE_MINUTES_BEFORE_SHIFT_END = 10;
 const MONTHLY_8HR_PASS_LIMIT = 1;
 
+const SHORT_LEAVE_WINDOW_OPEN = 17 * 60 + 59;
+const SHORT_LEAVE_WINDOW_CLOSE = 18 * 60 + 45;
+
 const formatTime = (date) =>
     moment(date).tz("Asia/Kolkata").format("hh:mm a");
 
@@ -871,6 +874,16 @@ const punchOut = async (req, res) => {
         const userDocOut = await User.findById(userId).select("shift").lean();
         const scOut = getShiftConfig(userDocOut?.shift);
 
+
+        const shiftDurationMinutes =
+            scOut.shiftEnd > scOut.shiftStart
+                ? scOut.shiftEnd - scOut.shiftStart          // normal  e.g. 600 → 1140 = 540 min
+                : (1440 - scOut.shiftStart) + scOut.shiftEnd; // overnight e.g. 1320 → 420
+
+        const workedMinutes = Math.round(workHours * 60);
+        // Allow up to 10-minute shortfall (same as GRACE_MINUTES_BEFORE_SHIFT_END)
+        const shiftCompleted = workedMinutes >= (shiftDurationMinutes - GRACE_MINUTES_BEFORE_SHIFT_END);
+
         // ─────────────────────────────────────────────
         // OVERTIME
         // ─────────────────────────────────────────────
@@ -888,7 +901,7 @@ const punchOut = async (req, res) => {
         const overtime = parseFloat((overtimeMinutes / 60).toFixed(2));
 
         // ─────────────────────────────────────────────
-        // HALF DAY LOGIC
+        // HALF DAY / SHORT LEAVE LOGIC
         // ─────────────────────────────────────────────
         const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
         const rawNowDate = now.toDate();
@@ -918,14 +931,90 @@ const punchOut = async (req, res) => {
             eightHourPassUsedCount < MONTHLY_8HR_PASS_LIMIT &&
             roundedWorkHours >= LENIENCY_WORK_HOURS;
 
+        // ── Short leave check (default shift only: 10:00–19:00) ──────────────
+        // Qualifies if punch-out falls strictly between 17:59 and 18:45
+        const isInShortLeaveWindow =
+            scOut.isDefaultShift &&
+            punchOutMinutes > SHORT_LEAVE_WINDOW_OPEN &&
+            punchOutMinutes < SHORT_LEAVE_WINDOW_CLOSE;
+
         let halfDayReason = "";
         let usedGrace = false;
         let used8HrPass = false;
+        let usedShortLeave = false;
 
         if (!alreadyHalfDay && shortHours) {
-            if (withinGrace) {
-                // Within 10-min grace — full day, no pass consumed
+            if (withinGrace || shiftCompleted) {
                 usedGrace = true;
+            } else if (isInShortLeaveWindow) {
+                // ── SHORT LEAVE BRANCH ──────────────────────────────────────
+                // Check if user has short leave quota remaining this month
+                const userForSL = await User.findById(userId)
+                    .select("leaveBalance name email");
+
+                const nowMonth = now.month() + 1; // moment months are 0-indexed
+                const nowYear = now.year();
+
+                const sl = userForSL.leaveBalance?.shortLeave || {};
+                const slGrantedMonth = sl.lastGrantedMonth || nowMonth;
+                const slGrantedYear = sl.lastGrantedYear || nowYear;
+
+                // Reset used count if we're in a new month
+                const isNewMonth =
+                    slGrantedYear < nowYear ||
+                    (slGrantedYear === nowYear && slGrantedMonth < nowMonth);
+
+                const slUsedThisMonth = isNewMonth ? 0 : (sl.used || 0);
+                const slTotalThisMonth = 1; // always 1 per month
+
+                if (slUsedThisMonth < slTotalThisMonth) {
+                    // Short leave quota available — mark as short-leave (not half-day)
+                    usedShortLeave = true;
+                    attendance.isShortLeave = true;
+                    attendance.status = "short-leave";
+
+                    // Deduct short leave quota
+                    await User.findByIdAndUpdate(userId, {
+                        "leaveBalance.shortLeave.used": slUsedThisMonth + 1,
+                        "leaveBalance.shortLeave.lastGrantedMonth": nowMonth,
+                        "leaveBalance.shortLeave.lastGrantedYear": nowYear,
+                    });
+
+                    User.findById(userId).select("email name").then(employee => {
+                        if (!employee) return;
+                        sendMail({
+                            to: employee.email,
+                            subject: "🕐 Short Leave Marked",
+                            html: `
+                                <p>Hi ${employee.name},</p>
+                                <p>Your punch-out at <b>${formatTime(nowDate)}</b> has been recorded as a <b>Short Leave</b>.</p>
+                                <p>Hours Worked: <b>${roundedWorkHours} hrs</b></p>
+                                <p>⚠️ Your monthly short leave quota (1/month) has been consumed. It will reset next month.</p>
+                            `,
+                        }).catch(err => console.error("Email error (shortLeave):", err));
+                    }).catch(err => console.error("User fetch error (shortLeave):", err));
+
+                } else {
+                    // Short leave quota exhausted — fall back to half day
+                    attendance.isHalfDay = true;
+                    attendance.status = "half-day";
+                    halfDayReason = `Early exit at ${formatTime(nowDate)} — short leave quota exhausted for this month`;
+
+                    User.findById(userId).select("email name").then(employee => {
+                        if (!employee) return;
+                        sendMail({
+                            to: employee.email,
+                            subject: "⚠️ Half Day Marked (Short Leave Quota Exhausted)",
+                            html: `
+                                <p>Hi ${employee.name},</p>
+                                <p>Your attendance has been marked as <b>Half Day</b>.</p>
+                                <p>Reason: <b>${halfDayReason}</b></p>
+                                <p>Punch Out: <b>${formatTime(nowDate)}</b> · Hours Worked: <b>${roundedWorkHours} hrs</b></p>
+                            `,
+                        }).catch(err => console.error("Email error (punchOut):", err));
+                    }).catch(err => console.error("User fetch error (punchOut):", err));
+                }
+
             } else if (qualifiesFor8HrPass) {
                 // Monthly 8-hour pass applied
                 used8HrPass = true;
@@ -1035,9 +1124,11 @@ const punchOut = async (req, res) => {
                 : "";
 
         const halfDayLabel =
-            attendance.isHalfDay
-                ? ` · ⚠️ Half Day`
-                : "";
+            attendance.isShortLeave
+                ? ` · 🕐 Short Leave`
+                : attendance.isHalfDay
+                    ? ` · ⚠️ Half Day`
+                    : "";
 
         // ─────────────────────────────────────────────
         // HR / TL / MANAGER NOTIFICATIONS ONLY
@@ -1152,7 +1243,7 @@ const getTodayAttendance = async (req, res) => {
 
 const getMonthlyAttendance = async (req, res) => {
     try {
-        const { month, year } = req.query;
+        const { month, year, userId: queryUserId } = req.query;
 
         if (!month || !year) {
             return res.status(400).json({
@@ -1161,8 +1252,36 @@ const getMonthlyAttendance = async (req, res) => {
             });
         }
 
+        // Cross-user access: only manager / hr may pass a userId
+        let targetUserId = req.user._id;
+        if (queryUserId && queryUserId !== req.user._id.toString()) {
+            const allowedRoles = ["manager", "hr"];
+            if (!allowedRoles.includes(req.user.role)) {
+                return res.status(403).json({
+                    success: false,
+                    message: "Access denied — cannot view another user's attendance",
+                });
+            }
+
+            // HR may only view employee / tl records
+            if (req.user.role === "hr") {
+                const targetUser = await User.findById(queryUserId).select("role").lean();
+                if (!targetUser) {
+                    return res.status(404).json({ success: false, message: "User not found" });
+                }
+                if (!["employee", "tl"].includes(targetUser.role)) {
+                    return res.status(403).json({
+                        success: false,
+                        message: "HR can only view attendance for employees and TLs",
+                    });
+                }
+            }
+
+            targetUserId = queryUserId;
+        }
+
         // ✅ Get user joining date
-        const user = await User.findById(req.user._id).select("joiningDate createdAt");
+        const user = await User.findById(targetUserId).select("joiningDate createdAt");
 
         const rawJoining = user?.joiningDate ? new Date(user.joiningDate) : null;
         const rawCreated = user?.createdAt ? new Date(user.createdAt) : null;
@@ -1178,7 +1297,7 @@ const getMonthlyAttendance = async (req, res) => {
 
         // ✅ Get actual attendance records
         const records = await Attendance.find({
-            user: req.user._id,
+            user: targetUserId,
             date: { $gte: start, $lte: end },
         }).sort({ date: 1 });
 
@@ -1594,8 +1713,14 @@ const getHRAttendanceOverview = async (req, res) => {
 
         // All active employees + tl + managers
         // FIX #8: added "manager" to role filter — was silently excluded before
+        const callerRole = req.user.role;
+        const visibleRoles =
+            callerRole === "manager"
+                ? ["employee", "tl", "hr"]
+                : ["employee", "tl"]; // hr (and any other caller)
+
         const allEmployees = await User.find({
-            role: { $in: ["employee", "tl"] },
+            role: { $in: visibleRoles },
             status: "active",
         }).select("name employeeId department designation role joiningDate reportingTo shift");
 
@@ -1617,7 +1742,7 @@ const getHRAttendanceOverview = async (req, res) => {
             status: "approved",
             fromDate: { $lte: end },
             toDate: { $gte: start },
-        }).populate("user", "name employeeId department");
+        }).populate("user", "name employeeId department role");
 
         // ── TODAY summary — use IST dateString for consistency ──────────
         const todayIST = moment().tz("Asia/Kolkata");
@@ -1796,7 +1921,12 @@ const getHRAttendanceOverview = async (req, res) => {
             monthlyStats,
             leaves: leaves.map(l => ({
                 _id: l._id,
-                user: { name: l.user.name, employeeId: l.user.employeeId, department: l.user.department },
+                user: {
+                    name: l.user.name,
+                    employeeId: l.user.employeeId,
+                    department: l.user.department,
+                    role: l.user.role,   // ← needed for frontend role-based filtering
+                },
                 type: l.type,
                 fromDate: l.fromDate,
                 toDate: l.toDate,

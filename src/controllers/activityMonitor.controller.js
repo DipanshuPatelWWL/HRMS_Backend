@@ -626,7 +626,6 @@ const requestCapture = async (req, res) => {
             io.to(userId.toString()).emit("capture:request", {
                 captureId: capture._id.toString(),
             });
-            console.log(`Capture request emitted to user_${userId} and ${userId}`);
         }
 
         return res.status(200).json({
@@ -646,7 +645,7 @@ const requestCapture = async (req, res) => {
 // ─────────────────────────────────────────────
 const uploadCapture = async (req, res) => {
     try {
-        const { captureId, screenshot, webcamPhoto, status } = req.body;
+        const { captureId, screenshot, status } = req.body;
 
         if (!captureId) {
             return res.status(400).json({ success: false, message: "captureId required" });
@@ -659,7 +658,6 @@ const uploadCapture = async (req, res) => {
             captureId,
             {
                 screenshot: screenshot || null,
-                webcamPhoto: webcamPhoto || null,
                 status: resolvedStatus,
                 completedAt: new Date(),
             },
@@ -676,7 +674,6 @@ const uploadCapture = async (req, res) => {
                 captureId: capture._id.toString(),
                 employeeId: capture.employee.toString(),
                 screenshot: capture.screenshot,
-                webcamPhoto: capture.webcamPhoto,
                 completedAt: capture.completedAt,
                 status: resolvedStatus,   // ← HR frontend can show "failed" state
             });

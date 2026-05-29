@@ -29,7 +29,7 @@ const HRAIRoutes = require("./routes/hr.ai.routes");
 const DailyReportRoutes = require("./routes/dailyReports.routes");
 const AssetsRoutes = require("./routes/assetRoutes");
 const PolicyRoutes = require("./routes/policy.routes");
-const isProd = process.env.NODE_ENV === "production";
+const isProd = process.env.NODE_ENV === "production1";
 
 //tracker router ------------------------
 const activityMonitorRoutes = require("./routes/activityMonitor.routes");
@@ -106,7 +106,7 @@ io.use((socket, next) => {
 });
 
 io.on("connection", (socket) => {
-    console.log("User connected:", socket.id, "| JWT payload:", JSON.stringify(socket.user));
+    console.log("User connected");
 
     // Auto-join from JWT — covers every field name your JWT might use
     const uid = socket.user?.id || socket.user?._id || socket.user?.userId;
@@ -114,18 +114,15 @@ io.on("connection", (socket) => {
         const uidStr = uid.toString();
         socket.join(`user_${uidStr}`);   // primary room used by requestCapture
         socket.join(uidStr);             // fallback room
-        console.log(`Auto-joined user_${uidStr} and ${uidStr}`);
     }
 
     const allowedRoles = ["hr", "admin", "manager", "superadmin"];
     if (allowedRoles.includes(socket.user?.role)) {
         socket.join("hr_room");
-        console.log(`Socket ${socket.id} joined hr_room`);
     }
 
     socket.on("join:hr_room", () => {
         socket.join("hr_room");
-        console.log(`Socket ${socket.id} joined hr_room manually`);
     });
 
     // Handle both: { userId: "abc" } object AND plain "abc" string
@@ -134,14 +131,12 @@ io.on("connection", (socket) => {
         if (!userId) return;
         socket.join(`user_${userId}`);
         socket.join(userId);
-        console.log(`Socket ${socket.id} manually joined user_${userId} and ${userId}`);
     });
 
     // Handle plain socket.emit("join", "user_abc") from agent
     socket.on("join", (room) => {
         if (typeof room === "string" && room.length < 100) {
             socket.join(room);
-            console.log(`Socket ${socket.id} joined room: ${room}`);
         }
     });
 
@@ -153,14 +148,12 @@ io.on("connection", (socket) => {
         io.to(targetUserId.toString()).emit("stream:start", { streamId });
         // Confirm to HR with the streamId so they can match frames
         socket.emit("stream:started", { streamId, targetUserId });
-        console.log(`Stream started: ${streamId}`);
     });
 
     // HR stops watching
     socket.on("stream:stop_request", ({ targetUserId }) => {
         io.to(`user_${targetUserId}`).emit("stream:stop");
         io.to(targetUserId.toString()).emit("stream:stop");
-        console.log(`Stream stopped for user: ${targetUserId}`);
     });
 
     // Employee Electron app forwards frame → relay to hr_room
@@ -169,7 +162,7 @@ io.on("connection", (socket) => {
     });
 
     socket.on("disconnect", () => {
-        console.log("User disconnected:", socket.id);
+        console.log("User disconnected");
     });
 });
 

@@ -148,7 +148,10 @@ const getMyDashboardStats = async (req, res) => {
 const getHRDashboardStats = async (req, res) => {
     try {
         // ── Core counts ─────────────────────────────────────────────
-        const totalEmployees = await User.countDocuments({ role: "employee" });
+        const totalEmployees = await User.countDocuments({
+            role: { $in: ["employee", "tl", "hr", "manager"] },
+            status: { $ne: "terminated" },
+        });
         const pendingLeaves = await Leave.countDocuments({ status: "pending" });
 
         // ── Present today — use IST dateString to match how punchIn saves ──
@@ -218,6 +221,7 @@ const getHRDashboardStats = async (req, res) => {
         thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
         const inactive30 = await User.countDocuments({
+            role: { $in: ["employee", "tl", "hr", "manager"] },
             status: "inactive",
             updatedAt: { $gte: thirtyDaysAgo },
         });
@@ -253,8 +257,9 @@ const getHRDashboardStats = async (req, res) => {
         const payrollSummary = payrollSummaryAgg[0] || null;
 
         // ── Birthdays & anniversaries (next 7 days) ──────────────────
-        const allUsers = await User.find({ role: "employee" })
-            .select("name dob joiningDate employeeId");
+        const allUsers = await User.find({
+            role: { $in: ["employee", "tl", "hr", "manager"] },
+        }).select("name dob joiningDate employeeId");
 
         const todayD = new Date();
         const upcoming = [];

@@ -131,9 +131,10 @@ const getAllUsers = async (req, res) => {
         let filter = {};
 
         if (req.user.role === "hr") {
-            filter.role = { $in: ["employee", "tl"] };
-        } else if (req.user.role === "manager") {
             filter.role = { $in: ["employee", "tl", "hr"] };
+        } else if (req.user.role === "manager") {
+            filter.role = { $in: ["employee", "tl", "hr", "manager"] };
+            filter.status = { $ne: "terminated" };
         } else if (req.user.role === "tl") {
             filter.reportingTo = req.user._id;
         }
@@ -160,6 +161,7 @@ const getAllUsers = async (req, res) => {
 };
 
 
+
 // ─────────────────────────────────────────────
 //  GET ALL TLs  (HR uses this to populate dropdown)
 // ─────────────────────────────────────────────
@@ -171,6 +173,35 @@ const getAllTLs = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+
+const getUserList = async (req, res) => {
+    try {
+        const roleMap = {
+            manager: ["employee", "tl", "hr"],
+            hr: ["employee", "tl"],
+        };
+
+        const allowedRoles = roleMap[req.user.role];
+        if (!allowedRoles) {
+            return res.status(403).json({
+                success: false,
+                message: "Access denied — only manager and HR can view employee list",
+            });
+        }
+
+        const users = await User.find({
+            role: { $in: allowedRoles },
+            status: { $ne: "terminated" },
+            _id: { $ne: req.user._id }, // exclude self
+        }).select("_id name employeeId role department").lean();
+
+        res.status(200).json({ success: true, users });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 
 // ─────────────────────────────────────────────
@@ -1136,6 +1167,7 @@ const getLeaveBalance = async (req, res) => {
 
 module.exports = {
     createUserByHR,
+    getUserList,
     getAllUsers,
     getAllTLs,
     assignTeamToTL,

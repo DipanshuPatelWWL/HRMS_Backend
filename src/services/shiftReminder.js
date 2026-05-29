@@ -143,7 +143,6 @@ const startShiftReminderCron = () => {
 
                     // Mark as reminded so we don't send again
                     remindedSet.add(attId);
-                    console.log(`📧 Shift reminder sent to ${att.user.email} (shift ends at ${shiftEndLabel})`);
                 }
             }
 
@@ -152,7 +151,6 @@ const startShiftReminderCron = () => {
             // once at midnight IST.
             if (nowIST.hour() === 0 && nowIST.minute() === 0) {
                 remindedSet.clear();
-                console.log("🧹 Shift reminder set cleared at midnight");
             }
 
         } catch (err) {
@@ -161,8 +159,6 @@ const startShiftReminderCron = () => {
     }, {
         timezone: "Asia/Kolkata",
     });
-
-    console.log("✅ Shift end reminder cron started (runs every minute, IST)");
 };
 
 module.exports = { startShiftReminderCron };

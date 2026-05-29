@@ -94,8 +94,8 @@ const getDepartmentTasks = async (req, res) => {
             });
         }
 
-        // Find all users in TL's department
-        const deptUsers = await User.find({ department: req.user.department }).select("_id");
+        // Only users directly reporting to this TL
+        const deptUsers = await User.find({ reportingTo: req.user._id }).select("_id");
         const deptUserIds = deptUsers.map((u) => u._id);
 
         const filter = { assignedTo: { $in: deptUserIds } };
@@ -129,8 +129,7 @@ const getDepartmentMembers = async (req, res) => {
         }
 
         const members = await User.find({
-            department: req.user.department,
-            _id: { $ne: req.user._id }, // exclude TL themselves
+            reportingTo: req.user._id,
             role: { $in: ["employee", "tl"] },
         }).select("name email employeeId department role");
 
@@ -406,7 +405,7 @@ const getDeptStats = async (req, res) => {
             return res.status(403).json({ success: false, message: "No department assigned." });
         }
 
-        const deptUsers = await User.find({ department: req.user.department }).select("_id");
+        const deptUsers = await User.find({ reportingTo: req.user._id }).select("_id");
         const deptUserIds = deptUsers.map((u) => u._id);
 
         const filter = { assignedTo: { $in: deptUserIds } };

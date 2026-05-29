@@ -10,6 +10,7 @@ const {
 
 const {
     createUserByHR,
+    getUserList,
     getAllUsers,
     getSingleUser,
     updateUser,
@@ -183,6 +184,8 @@ router.get(
     allowRoles("hr", "tl", "manager", "superadmin"),
     getAllUsers
 );
+
+router.get("/list", protect, allowRoles("hr", "manager"), getUserList);
 
 router.get(
     "/:id",

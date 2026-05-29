@@ -10,8 +10,6 @@ const accrueMonthlyLeave = async () => {
         const thisYear = now.getFullYear();
         const thisMonth = now.getMonth() + 1;
 
-        console.log(`[LeaveAccrual] Monthly casual accrual started — ${thisYear}/${thisMonth}`);
-
         const users = await User.find({
             status: "active",
             role: { $in: ["employee", "tl"] },
@@ -35,6 +33,8 @@ const accrueMonthlyLeave = async () => {
                 carryForward: bal.casual?.carryForward ?? 0,
             };
 
+            user.leaveBalance.lastAccrualMonth = thisMonth;
+            user.leaveBalance.lastAccrualYear = thisYear;
             user.leaveBalance.lastResetMonth = thisMonth;
             user.leaveBalance.lastResetYear = thisYear;
             user.leaveBalance.lastAccrual = now;
@@ -42,8 +42,6 @@ const accrueMonthlyLeave = async () => {
             await user.save();
             count++;
         }
-
-        console.log(`[LeaveAccrual] Monthly accrual done — ${count} users got +1 casual leave`);
     } catch (error) {
         console.error("[LeaveAccrual] Monthly accrual error:", error.message);
     }
@@ -57,8 +55,6 @@ const runYearlyReset = async () => {
     try {
         const now = new Date();
         const thisYear = now.getFullYear();
-
-        console.log(`[LeaveAccrual] Yearly reset started — ${thisYear}`);
 
         const users = await User.find({
             status: "active",
@@ -79,6 +75,8 @@ const runYearlyReset = async () => {
                 used: 0,
                 carryForward: 0,
             };
+            user.leaveBalance.lastAccrualMonth = 0;
+            user.leaveBalance.lastAccrualYear = thisYear;
 
             // Sick — reset used only, keep HR-set total
             user.leaveBalance.sick = {
@@ -101,8 +99,6 @@ const runYearlyReset = async () => {
             await user.save();
             count++;
         }
-
-        console.log(`[LeaveAccrual] Yearly reset done — ${count} users reset`);
     } catch (error) {
         console.error("[LeaveAccrual] Yearly reset error:", error.message);
     }
@@ -112,17 +108,67 @@ const runYearlyReset = async () => {
 const startLeaveAccrualCron = () => {
     // Monthly — 1st of every month at midnight: +1 casual
     cron.schedule("0 0 1 * *", () => {
-        console.log("[LeaveAccrual] Running monthly casual accrual...");
         accrueMonthlyLeave();
     }, { timezone: "Asia/Kolkata" });
 
     // Yearly — Jan 1st at midnight: full reset
     cron.schedule("0 0 1 1 *", () => {
-        console.log("[LeaveAccrual] Running yearly reset...");
         runYearlyReset();
     }, { timezone: "Asia/Kolkata" });
-
-    console.log("[LeaveAccrual] Cron registered — monthly (+1 casual) + yearly (full reset) ✅");
 };
 
-module.exports = { startLeaveAccrualCron, accrueMonthlyLeave, runYearlyReset };
+// ─────────────────────────────────────────────────────────────
+//  MONTHLY SHORT LEAVE RESET
+//  Runs on the 1st of every month at 00:05 IST.
+//  Resets used = 0 and refreshes lastGrantedMonth/Year
+//  so every employee starts with 1 short leave again.
+// ─────────────────────────────────────────────────────────────
+const resetMonthlyShortLeave = async () => {
+    const now = new Date();
+    const nowMonth = now.getMonth() + 1;
+    const nowYear = now.getFullYear();
+
+    try {
+        const result = await User.updateMany(
+            {
+                $or: [
+                    { "leaveBalance.shortLeave.lastGrantedYear": { $lt: nowYear } },
+                    {
+                        "leaveBalance.shortLeave.lastGrantedYear": nowYear,
+                        "leaveBalance.shortLeave.lastGrantedMonth": { $lt: nowMonth },
+                    },
+                ],
+            },
+            {
+                $set: {
+                    "leaveBalance.shortLeave.used": 0,
+                    "leaveBalance.shortLeave.total": 1,
+                    "leaveBalance.shortLeave.lastGrantedMonth": nowMonth,
+                    "leaveBalance.shortLeave.lastGrantedYear": nowYear,
+                },
+            }
+        );
+        console.log(`✅ Short leave reset: ${result.modifiedCount} employees refreshed for ${nowMonth}/${nowYear}`);
+    } catch (err) {
+        console.error("❌ Short leave reset cron error:", err.message);
+    }
+};
+
+const startShortLeaveResetCron = () => {
+    // "5 0 1 * *" = 00:05 on the 1st of every month
+    // Using UTC+5:30 offset equivalent: 18:35 UTC on last day of previous month
+    // Simpler: run at midnight IST = 18:30 UTC
+    cron.schedule("35 18 28-31 * *", async () => {
+        // Only fire on the actual last-day→new-month transition
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        if (tomorrow.getDate() === 1) {
+            await resetMonthlyShortLeave();
+        }
+    }, { timezone: "Asia/Kolkata" });
+
+    // Also fire directly at midnight IST on the 1st
+    cron.schedule("0 0 1 * *", resetMonthlyShortLeave, { timezone: "Asia/Kolkata" });
+};
+
+module.exports = { startLeaveAccrualCron, accrueMonthlyLeave, runYearlyReset, resetMonthlyShortLeave, startShortLeaveResetCron };

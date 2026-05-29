@@ -279,10 +279,12 @@ const userSchema = new mongoose.Schema(
         },
         leaveBalance: {
             casual: {
-                total: { type: Number, default: 12 },
+                total: { type: Number, default: 0 },
                 used: { type: Number, default: 0 },
                 carryForward: { type: Number, default: 0 },
             },
+            lastAccrualMonth: { type: Number, default: null },
+            lastAccrualYear: { type: Number, default: null },
             sick: {
                 total: { type: Number, default: 0 },
                 used: { type: Number, default: 0 },
@@ -292,6 +294,13 @@ const userSchema = new mongoose.Schema(
                 total: { type: Number, default: 0 },
                 used: { type: Number, default: 0 },
                 carryForward: { type: Number, default: 0 },
+            },
+            // Short leave: 1 per month, expires unused, tracked separately
+            shortLeave: {
+                total: { type: Number, default: 1 },   // 1 per month
+                used: { type: Number, default: 0 },    // used this month
+                lastGrantedMonth: { type: Number, default: () => new Date().getMonth() + 1 },
+                lastGrantedYear: { type: Number, default: () => new Date().getFullYear() },
             },
             lastResetYear: { type: Number, default: () => new Date().getFullYear() },
             lastResetMonth: { type: Number, default: () => new Date().getMonth() + 1 },

@@ -120,6 +120,17 @@ const applyLeave = async (req, res) => {
             });
         }
 
+        // ── Block short leave on Monday (1) and Friday (5) ────
+        if (type === "short-leave") {
+            const dayOfWeek = moment.tz("Asia/Kolkata").day(); // 0=Sun,1=Mon,...,5=Fri,6=Sat
+            if (dayOfWeek === 1 || dayOfWeek === 5) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Short leave is not allowed on Mondays or Fridays.",
+                });
+            }
+        }
+
         // ── Count working days only ───────────────
         const totalDays = await countWorkingDays(from, to);
 
@@ -682,15 +693,76 @@ const deleteLeave = async (req, res) => {
     }
 };
 
+
+const computeExpectedCasualTotal = (user) => {
+    const now = new Date();
+    const nowMonth = now.getMonth() + 1; // 1–12
+    const nowYear = now.getFullYear();
+
+    const bal = user.leaveBalance || {};
+    const resetYear = bal.lastResetYear || nowYear;
+
+    if (resetYear < nowYear) {
+        return nowMonth;
+    }
+
+    return nowMonth;
+};
+
 const getLeaveBalance = async (req, res) => {
     try {
-        const targetId = req.params.userId || req.user._id;  // ← support HR fetching others
+        const targetId = req.params.userId || req.user._id;
         const user = await User.findById(targetId).select("leaveBalance name employeeId");
         if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
+        const now = new Date();
+        const nowMonth = now.getMonth() + 1;
+        const nowYear = now.getFullYear();
+
+        // ── Short leave ──────────────────────────────────────────────────
+        const sl = user.leaveBalance?.shortLeave || {};
+        const isNewMonth =
+            (sl.lastGrantedYear || nowYear) < nowYear ||
+            (
+                (sl.lastGrantedYear || nowYear) === nowYear &&
+                (sl.lastGrantedMonth || nowMonth) < nowMonth
+            );
+        const shortLeaveUsed = isNewMonth ? 0 : (sl.used || 0);
+        const shortLeaveAvailable = Math.max(0, 1 - shortLeaveUsed);
+
+        const expectedCasualTotal = computeExpectedCasualTotal(user);
+        const storedCasualTotal = user.leaveBalance?.casual?.total ?? 0;
+        const casualUsed = user.leaveBalance?.casual?.used ?? 0;
+
+        // Use whichever is greater: what the cron has stored, or
+        // what should have been stored by now (handles cron delays).
+        const casualTotal = Math.max(storedCasualTotal, expectedCasualTotal);
+        const casualRemaining = Math.max(0, casualTotal - casualUsed);
+
+        // ── Build response object ────────────────────────────────────────
+        const leaveBalance = user.leaveBalance?.toObject
+            ? user.leaveBalance.toObject()
+            : { ...(user.leaveBalance || {}) };
+
+        // Override casual with computed values
+        leaveBalance.casual = {
+            ...(leaveBalance.casual || {}),
+            total: casualTotal,
+            used: casualUsed,
+            remaining: casualRemaining,
+        };
+
+        // Override shortLeave
+        leaveBalance.shortLeave = {
+            ...(leaveBalance.shortLeave || {}),
+            total: 1,
+            used: shortLeaveUsed,
+            available: shortLeaveAvailable,
+        };
+
         res.json({
             success: true,
-            leaveBalance: user.leaveBalance,  // ← no fallback to old flat shape
+            leaveBalance,
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
