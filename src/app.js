@@ -29,7 +29,7 @@ const HRAIRoutes = require("./routes/hr.ai.routes");
 const DailyReportRoutes = require("./routes/dailyReports.routes");
 const AssetsRoutes = require("./routes/assetRoutes");
 const PolicyRoutes = require("./routes/policy.routes");
-const isProd = process.env.NODE_ENV === "production1";
+const isProd = process.env.NODE_ENV === "production";
 
 //tracker router ------------------------
 const activityMonitorRoutes = require("./routes/activityMonitor.routes");
