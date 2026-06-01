@@ -1295,11 +1295,12 @@ const getMonthlyAttendance = async (req, res) => {
         const start = moment.tz(`${year}-${String(month).padStart(2, '0')}-01`, "Asia/Kolkata").startOf("month").toDate();
         const end = moment.tz(`${year}-${String(month).padStart(2, '0')}-01`, "Asia/Kolkata").endOf("month").toDate();
 
-        // ✅ Get actual attendance records
+        const monthStr = `${year}-${String(month).padStart(2, "0")}`;
+
         const records = await Attendance.find({
             user: targetUserId,
-            date: { $gte: start, $lte: end },
-        }).sort({ date: 1 });
+            dateString: { $regex: `^${monthStr}` },
+        }).sort({ dateString: 1 });
 
         // ✅ Get holidays
         const holidays = await Holiday.find({
@@ -1309,14 +1310,23 @@ const getMonthlyAttendance = async (req, res) => {
         // Maps
         const recordMap = {};
         records.forEach(r => {
-            const d = new Date(r.date);
-            recordMap[d.getDate()] = r;
+            if (r.dateString) {
+                const day = parseInt(r.dateString.split("-")[2], 10);
+                recordMap[day] = r;
+            } else {
+                const day = parseInt(
+                    moment(r.date).tz("Asia/Kolkata").format("DD"), 10
+                );
+                recordMap[day] = r;
+            }
         });
 
         const holidayMap = {};
         holidays.forEach(h => {
-            const d = new Date(h.date);
-            holidayMap[d.getDate()] = h;
+            const day = parseInt(
+                moment(h.date).tz("Asia/Kolkata").format("DD"), 10
+            );
+            holidayMap[day] = h;
         });
 
         const isWeekend = (date) => {
@@ -1354,7 +1364,12 @@ const getMonthlyAttendance = async (req, res) => {
                 });
             }
             else {
-                const isFuture = currentDate > new Date();
+                const currentDateStr = moment.tz(
+                    `${year}-${String(month).padStart(2, "0")}-${String(i).padStart(2, "0")}`,
+                    "Asia/Kolkata"
+                ).format("YYYY-MM-DD");
+                const todayStr = moment().tz("Asia/Kolkata").format("YYYY-MM-DD");
+                const isFuture = currentDateStr > todayStr;
                 if (isFuture) continue;
                 fullData.push({
                     _id: `absent-${i}`,
@@ -1413,13 +1428,11 @@ const getMonthlyAttendance = async (req, res) => {
 // ─────────────────────────────────────────────
 const getWeeklyAttendanceSummary = async (req, res) => {
     try {
-        const now = new Date();
-        const day = now.getDay();
+        const nowIST = moment().tz("Asia/Kolkata");
+        const day = nowIST.day(); // 0=Sun
         const diff = day === 0 ? -6 : 1 - day;
 
-        const mon = new Date(now);
-        mon.setDate(now.getDate() + diff);
-        mon.setHours(0, 0, 0, 0);
+        const mon = nowIST.clone().add(diff, "days").startOf("day");
 
         const totalEmployees = await User.countDocuments({
             role: { $in: ["employee", "tl", "manager"] },
@@ -1430,19 +1443,17 @@ const getWeeklyAttendanceSummary = async (req, res) => {
         const result = [];
 
         for (let i = 0; i < 5; i++) {
-            const start = new Date(mon);
-            start.setDate(mon.getDate() + i);
-            const end = new Date(start);
-            end.setHours(23, 59, 59, 999);
+            const dayMoment = mon.clone().add(i, "days");
+            const dateStr = dayMoment.format("YYYY-MM-DD");
 
             const present = await Attendance.countDocuments({
-                date: { $gte: start, $lte: end },
+                dateString: dateStr,
                 status: { $in: ["present", "half-day"] },
             });
 
             result.push({
                 day: days[i],
-                date: start.toISOString().split("T")[0],
+                date: dateStr,
                 present,
                 absent: Math.max(0, totalEmployees - present),
             });
@@ -1638,7 +1649,12 @@ const getTeamAttendance = async (req, res) => {
                     "Asia/Kolkata"
                 );
                 const weekend = currentDateIST.day() === 0 || currentDateIST.day() === 6;
-                const isFuture = currentDate > new Date();
+                const currentDateStr = moment.tz(
+                    `${year}-${String(month).padStart(2, "0")}-${String(i).padStart(2, "0")}`,
+                    "Asia/Kolkata"
+                ).format("YYYY-MM-DD");
+                const todayStr = moment().tz("Asia/Kolkata").format("YYYY-MM-DD");
+                const isFuture = currentDateStr > todayStr;
 
                 const onLeave = memberLeaves.some(l => {
                     const from = new Date(l.fromDate); from.setHours(0, 0, 0, 0);
