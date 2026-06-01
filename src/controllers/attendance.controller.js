@@ -1289,7 +1289,7 @@ const getMonthlyAttendance = async (req, res) => {
             ? new Date(Math.max(rawJoining.getTime(), rawCreated.getTime()))
             : rawJoining || rawCreated || null;
         const joiningDate = effectiveStart
-            ? new Date(new Date(effectiveStart).setHours(0, 0, 0, 0))
+            ? moment.tz(effectiveStart, "Asia/Kolkata").startOf("day").toDate()
             : null;
 
         const start = moment.tz(`${year}-${String(month).padStart(2, '0')}-01`, "Asia/Kolkata").startOf("month").toDate();
@@ -1338,9 +1338,10 @@ const getMonthlyAttendance = async (req, res) => {
         const fullData = [];
 
         for (let i = 1; i <= daysInMonth; i++) {
-            const currentDate = new Date(year, month - 1, i);
-
-            // 🚫 IMPORTANT: Skip before joining date
+            const currentDate = moment.tz(
+                `${year}-${String(month).padStart(2, "0")}-${String(i).padStart(2, "0")}`,
+                "Asia/Kolkata"
+            ).startOf("day").toDate();
             if (joiningDate && currentDate < joiningDate) {
                 continue;
             }
@@ -1650,7 +1651,7 @@ const getTeamAttendance = async (req, res) => {
                 );
                 const weekend = currentDateIST.day() === 0 || currentDateIST.day() === 6;
                 const currentDateStr = moment.tz(
-                    `${year}-${String(month).padStart(2, "0")}-${String(i).padStart(2, "0")}`,
+                    `${year}-${String(month).padStart(2, "0")}-${String(d).padStart(2, "0")}`,
                     "Asia/Kolkata"
                 ).format("YYYY-MM-DD");
                 const todayStr = moment().tz("Asia/Kolkata").format("YYYY-MM-DD");
