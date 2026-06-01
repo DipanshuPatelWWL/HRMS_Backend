@@ -700,13 +700,13 @@ const computeExpectedCasualTotal = (user) => {
     const nowYear = now.getFullYear();
 
     const bal = user.leaveBalance || {};
-    const resetYear = bal.lastResetYear || nowYear;
+    const lastResetYear = bal.lastResetYear || 0;
 
-    if (resetYear < nowYear) {
+    if (lastResetYear < nowYear) {
         return nowMonth;
     }
 
-    return nowMonth;
+    return Math.max(bal.casual?.total ?? 0, nowMonth);
 };
 
 const getLeaveBalance = async (req, res) => {
@@ -734,10 +734,14 @@ const getLeaveBalance = async (req, res) => {
         const storedCasualTotal = user.leaveBalance?.casual?.total ?? 0;
         const casualUsed = user.leaveBalance?.casual?.used ?? 0;
 
-        // Use whichever is greater: what the cron has stored, or
-        // what should have been stored by now (handles cron delays).
-        const casualTotal = Math.max(storedCasualTotal, expectedCasualTotal);
-        const casualRemaining = Math.max(0, casualTotal - casualUsed);
+        const lastResetYear = user.leaveBalance?.lastResetYear || 0;
+        const isStaleFromLastYear = lastResetYear < nowYear;
+
+        const casualTotal = isStaleFromLastYear
+            ? expectedCasualTotal
+            : Math.max(storedCasualTotal, expectedCasualTotal);
+
+        const casualRemaining = Math.max(0, casualTotal - (isStaleFromLastYear ? 0 : casualUsed));
 
         // ── Build response object ────────────────────────────────────────
         const leaveBalance = user.leaveBalance?.toObject

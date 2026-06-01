@@ -69,28 +69,30 @@ const runYearlyReset = async () => {
             // Skip if already reset this year
             if (bal.lastResetYear === thisYear) continue;
 
-            // Casual — full reset, earns again month by month
+            // ✅ Casual — hard reset to 0, no carry forward, earns fresh from Jan
             user.leaveBalance.casual = {
                 total: 0,
                 used: 0,
                 carryForward: 0,
             };
+
+            // ✅ Sick — reset both total AND used (no carry forward)
+            user.leaveBalance.sick = {
+                total: bal.sick?.total ?? 0, // keep HR-set allocation
+                used: 0,
+                carryForward: 0,
+            };
+
+            // ✅ Earned — reset both total AND used (no carry forward)
+            user.leaveBalance.earned = {
+                total: bal.earned?.total ?? 0, // keep HR-set allocation
+                used: 0,
+                carryForward: 0,
+            };
+
+            // ✅ Reset accrual to 0 so January fires correctly
             user.leaveBalance.lastAccrualMonth = 0;
             user.leaveBalance.lastAccrualYear = thisYear;
-
-            // Sick — reset used only, keep HR-set total
-            user.leaveBalance.sick = {
-                total: bal.sick?.total ?? 0,
-                used: 0,
-                carryForward: 0,
-            };
-
-            // Earned — reset used only, keep HR-set total
-            user.leaveBalance.earned = {
-                total: bal.earned?.total ?? 0,
-                used: 0,
-                carryForward: 0,
-            };
 
             user.leaveBalance.lastResetYear = thisYear;
             user.leaveBalance.lastResetMonth = 1;

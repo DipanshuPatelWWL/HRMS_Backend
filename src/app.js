@@ -72,6 +72,7 @@ app.use((req, res, next) => {
 });
 app.use("/uploads", express.static("uploads"));
 
+app.use("/updates", express.static("updates"));
 const io = new Server(server, {
     cors: {
         origin: (origin, callback) => {

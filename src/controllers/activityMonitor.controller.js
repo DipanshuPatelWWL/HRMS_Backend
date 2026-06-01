@@ -200,6 +200,32 @@ const buildBrowserActivity = (logs) => {
         }));
 };
 
+
+
+// ─────────────────────────────────────────────
+//  ROLLING 3-DAY CLEANUP HELPER
+//  Keeps only the 3 most recent dateStrings for a user.
+//  Called after every logActivity insert.
+// ─────────────────────────────────────────────
+const purgeOldActivity = async (userId) => {
+    const distinct = await ActivityLog.aggregate([
+        { $match: { user: new mongoose.Types.ObjectId(userId) } },
+        { $group: { _id: "$dateString" } },
+        { $sort: { _id: -1 } },
+    ]);
+
+    if (distinct.length <= 3) return;
+
+    const keepDates = distinct.slice(0, 3).map((d) => d._id);
+
+    await ActivityLog.deleteMany({
+        user: new mongoose.Types.ObjectId(userId),
+        dateString: { $nin: keepDates },
+    });
+};
+
+
+
 // ─────────────────────────────────────────────
 //  LOG ACTIVITY  — called by Electron agent
 //  POST /api/activity-monitor/log
@@ -267,6 +293,8 @@ const logActivity = async (req, res) => {
         });
 
         await ActivityLog.insertMany(docs, { ordered: false });
+
+        await purgeOldActivity(userId);
 
         // Emit live update to hr_room via Socket.IO
         const io = req.app.get("io");
@@ -715,4 +743,5 @@ module.exports = {
     requestCapture,
     uploadCapture,
     getCaptureHistory,
+    purgeOldActivity
 };
