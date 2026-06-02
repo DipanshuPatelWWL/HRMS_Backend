@@ -328,17 +328,33 @@ const punchIn = async (req, res) => {
                 const incomingUUID = deviceUUID.trim().toUpperCase();
                 const incomingProduct = productId.trim().toUpperCase();
 
+                // ✅ DEBUG
+                console.log("=== DEVICE CHECK ===");
+                console.log("Raw deviceUUID received:", JSON.stringify(deviceUUID));
+                console.log("Raw productId received:", JSON.stringify(productId));
+                console.log("Cleaned UUID:", incomingUUID);
+                console.log("Cleaned PID:", incomingProduct);
+
                 const matchedDevice = ALLOWED_DEVICES.find(d => {
                     const uuidOk = d.deviceUUID.trim().toUpperCase() === incomingUUID;
                     const productOk = d.productId.trim().toUpperCase() === incomingProduct;
+
+                    // ✅ DEBUG LOG — remove after fix
+                    console.log(`Checking device: ${d.label}`);
+                    console.log(`  UUID match: ${uuidOk} | DB: "${d.deviceUUID.trim().toUpperCase()}" vs Incoming: "${incomingUUID}"`);
+                    console.log(`  PID match:  ${productOk} | DB: "${d.productId.trim().toUpperCase()}" vs Incoming: "${incomingProduct}"`);
+
                     return uuidOk && productOk;
                 });
 
                 if (matchedDevice) {
                     verifiedBy = "device";
                     deviceMatched = true;
+                    console.log(`✅ Device matched: ${matchedDevice.label}`);
                 } else {
-                    console.log(`❌ Device not in allowed list — UUID: ${incomingUUID}`);
+                    console.log(`❌ Device not matched`);
+                    console.log(`   Incoming UUID:    "${incomingUUID}"`);
+                    console.log(`   Incoming Product: "${incomingProduct}"`);
                 }
             }
 
