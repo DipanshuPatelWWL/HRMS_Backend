@@ -335,26 +335,31 @@ const punchIn = async (req, res) => {
                 console.log("Cleaned UUID:", incomingUUID);
                 console.log("Cleaned PID:", incomingProduct);
 
-                const matchedDevice = ALLOWED_DEVICES.find(d => {
+                // ✅ Match by both UUID + ProductId
+                let matchedDevice = ALLOWED_DEVICES.find(d => {
                     const uuidOk = d.deviceUUID.trim().toUpperCase() === incomingUUID;
                     const productOk = d.productId.trim().toUpperCase() === incomingProduct;
-
-                    // ✅ DEBUG LOG — remove after fix
-                    console.log(`Checking device: ${d.label}`);
-                    console.log(`  UUID match: ${uuidOk} | DB: "${d.deviceUUID.trim().toUpperCase()}" vs Incoming: "${incomingUUID}"`);
-                    console.log(`  PID match:  ${productOk} | DB: "${d.productId.trim().toUpperCase()}" vs Incoming: "${incomingProduct}"`);
-
+                    console.log(`Checking: ${d.label} | UUID:${uuidOk} | PID:${productOk}`);
                     return uuidOk && productOk;
                 });
+
+                // ✅ Fallback — match by ProductId only
+                // UUID 03000200 is generic/shared across many PCs
+                if (!matchedDevice) {
+                    matchedDevice = ALLOWED_DEVICES.find(d =>
+                        d.productId.trim().toUpperCase() === incomingProduct
+                    );
+                    if (matchedDevice) {
+                        console.log(`✅ Matched by ProductId only: ${matchedDevice.label}`);
+                    }
+                }
 
                 if (matchedDevice) {
                     verifiedBy = "device";
                     deviceMatched = true;
                     console.log(`✅ Device matched: ${matchedDevice.label}`);
                 } else {
-                    console.log(`❌ Device not matched`);
-                    console.log(`   Incoming UUID:    "${incomingUUID}"`);
-                    console.log(`   Incoming Product: "${incomingProduct}"`);
+                    console.log(`❌ Not matched — UUID: ${incomingUUID} | PID: ${incomingProduct}`);
                 }
             }
 
