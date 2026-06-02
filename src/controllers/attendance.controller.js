@@ -62,6 +62,11 @@ const ALLOWED_DEVICES = [
         productId: "00342-50786-03990-AAOEM",
         label: "Dipanshu Office PC",
     },
+    {
+        deviceUUID: "03000200-0400-0500-0006-000700080009",
+        productId: "00329-00000-00003-AA198",
+        label: "Desk-3 Office PC",
+    },
 ];
 
 // ─────────────────────────────────────────────
