@@ -328,18 +328,10 @@ const punchIn = async (req, res) => {
                 const incomingUUID = deviceUUID.trim().toUpperCase();
                 const incomingProduct = productId.trim().toUpperCase();
 
-                // ✅ DEBUG
-                console.log("=== DEVICE CHECK ===");
-                console.log("Raw deviceUUID received:", JSON.stringify(deviceUUID));
-                console.log("Raw productId received:", JSON.stringify(productId));
-                console.log("Cleaned UUID:", incomingUUID);
-                console.log("Cleaned PID:", incomingProduct);
-
                 // ✅ Match by both UUID + ProductId
                 let matchedDevice = ALLOWED_DEVICES.find(d => {
                     const uuidOk = d.deviceUUID.trim().toUpperCase() === incomingUUID;
                     const productOk = d.productId.trim().toUpperCase() === incomingProduct;
-                    console.log(`Checking: ${d.label} | UUID:${uuidOk} | PID:${productOk}`);
                     return uuidOk && productOk;
                 });
 
@@ -349,17 +341,13 @@ const punchIn = async (req, res) => {
                     matchedDevice = ALLOWED_DEVICES.find(d =>
                         d.productId.trim().toUpperCase() === incomingProduct
                     );
-                    if (matchedDevice) {
-                        console.log(`✅ Matched by ProductId only: ${matchedDevice.label}`);
-                    }
                 }
 
                 if (matchedDevice) {
                     verifiedBy = "device";
                     deviceMatched = true;
-                    console.log(`✅ Device matched: ${matchedDevice.label}`);
                 } else {
-                    console.log(`❌ Not matched — UUID: ${incomingUUID} | PID: ${incomingProduct}`);
+                    console.log(`❌ Not matched — Please Check Your Ids`);
                 }
             }
 
