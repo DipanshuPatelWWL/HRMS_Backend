@@ -51,6 +51,13 @@ router.get("/me/government-id", protect, getGovernmentId);
 router.put("/me/government-id", protect, updateGovernmentId);
 router.get("/me/bank-details", protect, getBankDetails);
 router.put("/me/bank-details", protect, updateBankDetails);
+// Shift reminder email preference
+router.put(
+    "/me/preferences",
+    protect,
+    allowRoles("hr", "manager", "tl", "employee"),
+    manageShiftReminder
+)
 
 router.get("/me/documents", protect, getEmployeeDocuments);
 router.post(
@@ -201,14 +208,6 @@ router.get(
     protect,
     allowRoles("hr", "manager", "tl", "superadmin"),
     getLeaveBalance
-)
-
-// Shift reminder email preference
-router.put(
-    "/me/preferences",
-    protect,
-    allowRoles("hr", "manager", "tl", "employee"),
-    manageShiftReminder
 )
 
 module.exports = router;
