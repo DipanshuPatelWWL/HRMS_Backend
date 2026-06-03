@@ -319,10 +319,9 @@ const unassignEmployeeFromTL = async (req, res) => {
 const updateUser = async (req, res) => {
     try {
         const updates = req.body;
-
-        // Flatten salary into dot-notation so nested fields
-        // don't overwrite unrelated salary sub-fields
         const flatUpdates = { ...updates };
+        delete flatUpdates.password;
+
         if (updates.salary && typeof updates.salary === "object") {
             delete flatUpdates.salary;
             if (updates.salary.monthly !== undefined) {
@@ -336,7 +335,7 @@ const updateUser = async (req, res) => {
         const user = await User.findByIdAndUpdate(
             req.params.id,
             { $set: flatUpdates },
-            { new: true, runValidators: true }
+            { new: true, runValidators: false }
         ).select("-password");
 
         if (!user) {
@@ -1164,6 +1163,21 @@ const getLeaveBalance = async (req, res) => {
 }
 
 
+// Shift reminder email preference
+const manageShiftReminder = async (req, res) => {
+    try {
+        const { shiftReminderEmail } = req.body;
+        const user = await User.findByIdAndUpdate(
+            req.user._id,
+            { shiftReminderEmail },
+            { new: true }
+        ).select("shiftReminderEmail");
+        res.json({ success: true, shiftReminderEmail: user.shiftReminderEmail });
+    } catch (err) {
+        res.status(500).json({ message: "Failed to update preference" });
+    }
+};
+
 
 module.exports = {
     createUserByHR,
@@ -1191,5 +1205,6 @@ module.exports = {
     verifyEmployeeDocument,
     updateEmployeeShift,
     bulkUpdateShift,
-    getLeaveBalance
+    getLeaveBalance,
+    manageShiftReminder
 };

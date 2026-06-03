@@ -25,7 +25,7 @@ router.put(
 router.put(
     "/:userId/structure",
     protect,
-    allowRoles("hr", "manager"),
+    allowRoles("hr", "manager", "superadmin"),
     updateSalaryStructure
 );
 

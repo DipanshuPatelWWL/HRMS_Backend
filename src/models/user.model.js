@@ -230,10 +230,10 @@ const userSchema = new mongoose.Schema(
 
             // ── Salary Structure (HR configures per employee) ──
             structure: {
-                basic: { enabled: { type: Boolean, default: true }, percent: { type: Number, default: 40 } },
+                basic: { enabled: { type: Boolean, default: true }, percent: { type: Number, default: 50 } },
                 hra: { enabled: { type: Boolean, default: true }, percent: { type: Number, default: 20 } },
-                specialAllowance: { enabled: { type: Boolean, default: true }, percent: { type: Number, default: 25 } },
-                conveyance: { enabled: { type: Boolean, default: true }, percent: { type: Number, default: 10 } },
+                specialAllowance: { enabled: { type: Boolean, default: true }, percent: { type: Number, default: 10 } },
+                conveyance: { enabled: { type: Boolean, default: true }, percent: { type: Number, default: 15 } },
                 otherAllowance: { enabled: { type: Boolean, default: true }, percent: { type: Number, default: 5 } },
             },
 
@@ -310,6 +310,10 @@ const userSchema = new mongoose.Schema(
         isLegacyEmployee: {
             type: Boolean,
             default: false,
+        },
+        shiftReminderEmail: {
+            type: Boolean,
+            default: true,
         },
         sessions: [
             {

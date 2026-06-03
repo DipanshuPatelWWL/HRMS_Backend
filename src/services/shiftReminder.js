@@ -1,21 +1,11 @@
-// ─────────────────────────────────────────────
-//  SHIFT END REMINDER — runs every minute via cron
-//  Sends an email 5 minutes before each employee's shift end
-//  if they are currently punched in and haven't punched out yet.
-// ─────────────────────────────────────────────
-
 const cron = require("node-cron");
 const moment = require("moment-timezone");
 const Attendance = require("../models/attendance.model");
 const User = require("../models/user.model");
 const { sendMail } = require("./emailClient");
 
-// Track which attendanceIds have already had reminder sent this session
-// to avoid sending duplicate emails if the cron fires multiple times
-// in the same minute window.
 const remindedSet = new Set();
 
-// Helper: derive shift end in minutes from midnight from a user's shift doc
 const getShiftEndMinutes = (shift) => {
     const s = shift || {};
     const endH = s.endHour ?? 19;
@@ -31,7 +21,6 @@ const fmt12h = (totalMinutes) => {
 };
 
 const startShiftReminderCron = () => {
-    // Runs every minute
     cron.schedule("* * * * *", async () => {
         try {
             const nowIST = moment().tz("Asia/Kolkata");
@@ -39,38 +28,26 @@ const startShiftReminderCron = () => {
             const yesterdayString = nowIST.clone().subtract(1, "day").format("YYYY-MM-DD");
 
             const currentMinutes = nowIST.hour() * 60 + nowIST.minute();
-            const REMIND_BEFORE = 5; // minutes before shift end
+            const REMIND_BEFORE = 5;
 
-            // Find all open punch-ins (today + yesterday for overnight shifts)
             const openAttendances = await Attendance.find({
                 punchOut: null,
                 dateString: { $in: [todayString, yesterdayString] },
-            }).populate("user", "name email shift");
+            }).populate("user", "name email shift shiftReminderEmail");
 
             for (const att of openAttendances) {
                 if (!att.user || !att.user.email) continue;
+                if (att.user.shiftReminderEmail === false) continue;
 
-                // Skip if already reminded this session
                 const attId = att._id.toString();
                 if (remindedSet.has(attId)) continue;
 
                 const shiftEndMins = getShiftEndMinutes(att.user.shift);
-
-                // Calculate how many minutes until shift end
-                // Handle overnight: if shiftEnd < currentMinutes, it's next-day end
                 let minutesUntilEnd = shiftEndMins - currentMinutes;
-
-                // Overnight shift correction:
-                // e.g. shift ends at 01:00 (60 min), current time is 00:55 (55 min)
-                // minutesUntilEnd = 60 - 55 = 5 ✅ correct
-                // e.g. shift ends at 01:00 (60 min), current time is 23:55 (1435 min)  
-                // minutesUntilEnd = 60 - 1435 = -1375 → add 1440 = 65 min ✅ correct
                 if (minutesUntilEnd < -60) {
                     minutesUntilEnd += 1440;
                 }
 
-                // Fire reminder at exactly REMIND_BEFORE minutes before shift end
-                // We allow a 1-minute window (0 to 1 min) to account for cron timing
                 if (minutesUntilEnd >= REMIND_BEFORE && minutesUntilEnd < REMIND_BEFORE + 1) {
                     const shiftEndLabel = fmt12h(shiftEndMins);
                     const employeeName = att.user.name || "Employee";
@@ -140,15 +117,9 @@ const startShiftReminderCron = () => {
     </div>
 </div>`,
                     });
-
-                    // Mark as reminded so we don't send again
                     remindedSet.add(attId);
                 }
             }
-
-            // Clean up remindedSet daily — remove entries older than 2 days
-            // to prevent unbounded memory growth. We do this by clearing the set
-            // once at midnight IST.
             if (nowIST.hour() === 0 && nowIST.minute() === 0) {
                 remindedSet.clear();
             }

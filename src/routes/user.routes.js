@@ -34,7 +34,8 @@ const {
     verifyEmployeeDocument,
     updateEmployeeShift,
     bulkUpdateShift,
-    getLeaveBalance
+    getLeaveBalance,
+    manageShiftReminder
 } = require("../controllers/user.controller");
 
 
@@ -200,6 +201,14 @@ router.get(
     protect,
     allowRoles("hr", "manager", "tl", "superadmin"),
     getLeaveBalance
+)
+
+// Shift reminder email preference
+router.put(
+    "/me/preferences",
+    protect,
+    allowRoles("hr", "manager", "tl", "employee"),
+    manageShiftReminder
 )
 
 module.exports = router;

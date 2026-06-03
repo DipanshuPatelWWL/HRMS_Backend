@@ -85,16 +85,16 @@ const calculateSalary = async (userId, month, year) => {
 
     // ── Per day rate ──────────────────────────────────────
     // Based on working days NOT calendar days for accuracy
-    const perDay = round2(monthlySalary / totalWorkingDays);
+    const perDay = round2(monthlySalary / totalCalendarDays);
     const halfDayPay = round2(perDay / 2);
 
     // ── Salary structure snapshot ─────────────────────────
     const structure = user.salary?.structure || {};
     const DEFAULTS = {
-        basic: { enabled: true, percent: 40 },
+        basic: { enabled: true, percent: 50 },
         hra: { enabled: true, percent: 20 },
-        specialAllowance: { enabled: true, percent: 25 },
-        conveyance: { enabled: true, percent: 10 },
+        specialAllowance: { enabled: true, percent: 10 },
+        conveyance: { enabled: true, percent: 15 },
         otherAllowance: { enabled: true, percent: 5 },
     };
     const LABELS = {
@@ -253,15 +253,13 @@ const calculateSalary = async (userId, month, year) => {
     const halfDayDeduct = round2(halfDays * halfDayPay);
     const unpaidLeaveAmt = round2(unpaidLeave * perDay);
     const totalAttendanceDeductions = round2(
-        absentAmt + unpaidLeaveAmt
-        // halfDayDeduct already reflected in earning (earned half instead of full)
+        unpaidLeaveAmt
     );
-
     const totalDeductions = round2(
         totalAttendanceDeductions + totalStatutoryDeductions
     );
 
-    const netSalary = round2(Math.max(0, grossEarnings - totalAttendanceDeductions - totalStatutoryDeductions));
+    const netSalary = round2(Math.max(0, grossEarnings - unpaidLeaveAmt - totalStatutoryDeductions));
 
     return {
         // ── Config ──────────────────────────────────────

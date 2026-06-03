@@ -1321,6 +1321,14 @@ const getMonthlyAttendance = async (req, res) => {
             date: { $gte: start, $lte: end },
         });
 
+        // Get approved leaves for this user in this month
+        const approvedLeaves = await Leave.findOne({
+            user: targetUserId,
+            status: "approved",
+            fromDate: { $lte: end },
+            toDate: { $gte: start },
+        });
+
         // Maps
         const recordMap = {};
         records.forEach(r => {
@@ -1386,16 +1394,39 @@ const getMonthlyAttendance = async (req, res) => {
                 const todayStr = moment().tz("Asia/Kolkata").format("YYYY-MM-DD");
                 const isFuture = currentDateStr > todayStr;
                 if (isFuture) continue;
-                fullData.push({
-                    _id: `absent-${i}`,
-                    date: currentDate,
-                    status: "absent",
-                    punchIn: null,
-                    punchOut: null,
-                    workHours: 0,
-                    isLate: false,
-                    isHalfDay: false,
+
+                // ── Check if this day falls within an approved leave ──
+                const onLeave = await Leave.findOne({
+                    user: targetUserId,
+                    status: "approved",
+                    fromDate: { $lte: moment.tz(currentDateStr, "Asia/Kolkata").endOf("day").toDate() },
+                    toDate: { $gte: moment.tz(currentDateStr, "Asia/Kolkata").startOf("day").toDate() },
                 });
+
+                if (onLeave) {
+                    fullData.push({
+                        _id: `leave-${i}`,
+                        date: currentDate,
+                        status: "leave",
+                        leaveType: onLeave.type,
+                        punchIn: null,
+                        punchOut: null,
+                        workHours: 0,
+                        isLate: false,
+                        isHalfDay: false,
+                    });
+                } else {
+                    fullData.push({
+                        _id: `absent-${i}`,
+                        date: currentDate,
+                        status: "absent",
+                        punchIn: null,
+                        punchOut: null,
+                        workHours: 0,
+                        isLate: false,
+                        isHalfDay: false,
+                    });
+                }
             }
         }
 
@@ -1901,10 +1932,12 @@ const getHRAttendanceOverview = async (req, res) => {
             const lateDays = empRecords.filter(r => r.isLate && !r.isHalfDay).length;
             const absentDays = empRecords.filter(r => r.status === "absent").length;
             const leaveDays = empLeaves.reduce((acc, l) => {
-                const from = new Date(l.fromDate);
-                const to = new Date(l.toDate);
-                const diff = Math.ceil((to - from) / (1000 * 60 * 60 * 24)) + 1;
-                return acc + diff;
+                return acc + (l.totalDays || (
+                    Math.ceil(
+                        (new Date(l.toDate) - new Date(l.fromDate)) /
+                        (1000 * 60 * 60 * 24)
+                    ) + 1
+                ));
             }, 0);
 
             const totalWorkHours = parseFloat(
@@ -1956,11 +1989,12 @@ const getHRAttendanceOverview = async (req, res) => {
                     name: l.user.name,
                     employeeId: l.user.employeeId,
                     department: l.user.department,
-                    role: l.user.role,   // ← needed for frontend role-based filtering
+                    role: l.user.role,
                 },
                 type: l.type,
                 fromDate: l.fromDate,
                 toDate: l.toDate,
+                totalDays: l.totalDays,
                 status: l.status,
             })),
             holidays: holidays.map(h => ({ date: h.date, name: h.name })),
