@@ -138,6 +138,30 @@ const attendanceSchema = new mongoose.Schema(
     }
 );
 
-attendanceSchema.index({ user: 1, date: 1 }, { unique: true });
+attendanceSchema.index({
+    user: 1,
+    date: 1
+});
+
+attendanceSchema.index(
+    {
+        user: 1,
+        dateString: 1
+    },
+    {
+        unique: true
+    }
+);
+
+attendanceSchema.index({
+    user: 1,
+    isLate: 1,
+    date: 1
+});
+
+attendanceSchema.index({
+    user: 1,
+    createdAt: -1
+});
 
 module.exports = mongoose.model("Attendance", attendanceSchema);

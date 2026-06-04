@@ -86,7 +86,7 @@ const io = new Server(server, {
         credentials: true,
     },
     transports: ["websocket", "polling"],
-    maxHttpBufferSize: 50 * 1024 * 1024,  // ← allow large screenshot payloads via socket
+    maxHttpBufferSize: 50 * 1024 * 1024,
 });
 
 // 🔐 SOCKET AUTH
@@ -113,8 +113,8 @@ io.on("connection", (socket) => {
     const uid = socket.user?.id || socket.user?._id || socket.user?.userId;
     if (uid) {
         const uidStr = uid.toString();
-        socket.join(`user_${uidStr}`);   // primary room used by requestCapture
-        socket.join(uidStr);             // fallback room
+        socket.join(`user_${uidStr}`);
+        socket.join(uidStr);
     }
 
     const allowedRoles = ["hr", "admin", "manager", "superadmin"];
@@ -126,7 +126,6 @@ io.on("connection", (socket) => {
         socket.join("hr_room");
     });
 
-    // Handle both: { userId: "abc" } object AND plain "abc" string
     socket.on("join:user_room", (data) => {
         const userId = (typeof data === "object" ? data?.userId : data)?.toString();
         if (!userId) return;
@@ -134,7 +133,6 @@ io.on("connection", (socket) => {
         socket.join(userId);
     });
 
-    // Handle plain socket.emit("join", "user_abc") from agent
     socket.on("join", (room) => {
         if (typeof room === "string" && room.length < 100) {
             socket.join(room);
@@ -144,10 +142,8 @@ io.on("connection", (socket) => {
     // HR starts watching an employee's live stream
     socket.on("stream:request", ({ targetUserId }) => {
         const streamId = `${targetUserId}_${Date.now()}`;
-        // Tell the employee's Electron app to start streaming
         io.to(`user_${targetUserId}`).emit("stream:start", { streamId });
         io.to(targetUserId.toString()).emit("stream:start", { streamId });
-        // Confirm to HR with the streamId so they can match frames
         socket.emit("stream:started", { streamId, targetUserId });
     });
 
@@ -157,7 +153,6 @@ io.on("connection", (socket) => {
         io.to(targetUserId.toString()).emit("stream:stop");
     });
 
-    // Employee Electron app forwards frame → relay to hr_room
     socket.on("stream:frame", (data) => {
         io.to("hr_room").emit("stream:frame", data);
     });
@@ -201,5 +196,4 @@ app.use("/api/policies", PolicyRoutes);
 // -------------------------tracker route ------------------------------------
 app.use("/api/activity-monitor", activityMonitorRoutes);
 
-// ✅ EXPORT (IMPORTANT)
 module.exports = { app, server };

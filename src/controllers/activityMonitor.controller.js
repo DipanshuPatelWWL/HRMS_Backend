@@ -545,7 +545,12 @@ const getAppDetailReport = async (req, res) => {
         const logs = await ActivityLog.find({
             user: userId,
             dateString,
-        }).sort({ startTime: 1 });
+        })
+            .select(
+                "appName windowTitle duration category isBrowser isIncognito startTime endTime"
+            )
+            .lean()
+            .sort({ startTime: 1 });
 
         if (!logs.length) {
             return res.status(200).json({ success: true, dateString, data: [] });

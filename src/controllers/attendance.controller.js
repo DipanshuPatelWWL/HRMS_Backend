@@ -151,6 +151,531 @@ const getDistance = (lat1, lng1, lat2, lng2) => {
 // ─────────────────────────────────────────────
 //  PUNCH IN
 // ─────────────────────────────────────────────
+// const punchIn = async (req, res) => {
+//     try {
+//         const userId = req.user._id;
+
+//         const {
+//             deviceId,
+//             wifiSSID,
+//             isOfflinePunch,
+//             offlineTimestamp,
+//             deviceUUID,
+//             productId,
+//             lat,
+//             lng,
+//             accuracy,
+//         } = req.body || {};
+
+//         const userDoc = await User.findById(userId)
+//             .select("shift reportingTo email name")
+//             .lean();
+
+//         const scForTiming = getShiftConfig(userDoc?.shift);
+//         // ─────────────────────────────────────────────
+//         // INDIA TIMEZONE
+//         // ─────────────────────────────────────────────
+//         const serverNow = moment().tz("Asia/Kolkata");
+
+//         // Offline timestamp validation
+//         let now = serverNow.clone();
+
+//         if (isOfflinePunch) {
+
+//             if (!offlineTimestamp) {
+//                 return res.status(400).json({
+//                     success: false,
+//                     message: "Offline timestamp required",
+//                 });
+//             }
+
+//             const parsedOfflineTime = moment
+//                 .tz(offlineTimestamp, "Asia/Kolkata");
+
+//             if (!parsedOfflineTime.isValid()) {
+//                 return res.status(400).json({
+//                     success: false,
+//                     message: "Invalid offline timestamp",
+//                 });
+//             }
+
+//             // Allow only last 2 hours offline sync
+//             const diffMinutes = serverNow.diff(parsedOfflineTime, "minutes");
+
+//             if (diffMinutes > 120) {
+//                 return res.status(400).json({
+//                     success: false,
+//                     message: "Offline punch expired",
+//                 });
+//             }
+
+//             // Prevent future timestamps
+//             if (diffMinutes < 0) {
+//                 return res.status(400).json({
+//                     success: false,
+//                     message: "Future timestamp not allowed",
+//                 });
+//             }
+
+//             now = parsedOfflineTime.clone();
+//         }
+
+//         const nowDate = now.toDate();
+
+//         // Attendance date
+//         const todayStart = now.clone().startOf("day").toDate();
+//         const todayEnd = now.clone().endOf("day").toDate();
+//         const todayString = now.clone().format("YYYY-MM-DD");
+//         const totalMinutesNow = now.hour() * 60 + now.minute();
+
+//         const windowOpen = (scForTiming.shiftStart - 60 + 1440) % 1440;  // 1 hr before start
+//         const windowClose = (scForTiming.shiftEnd + 60) % 1440;          // 1 hr after end
+
+//         // Overnight window: windowOpen > windowClose (e.g. 720 open, 120 close for 1 PM–1 AM)
+//         const inWindow = windowOpen <= windowClose
+//             ? totalMinutesNow >= windowOpen && totalMinutesNow <= windowClose
+//             : totalMinutesNow >= windowOpen || totalMinutesNow <= windowClose;
+
+//         if (!inWindow) {
+//             const fmt = (m) => {
+//                 const h = Math.floor(m / 60) % 24;
+//                 const min = m % 60;
+//                 const ap = h >= 12 ? "PM" : "AM";
+//                 return `${h % 12 || 12}:${String(min).padStart(2, "0")} ${ap}`;
+//             };
+//             return res.status(400).json({
+//                 success: false,
+//                 message: `Punch-in allowed only between ${fmt(windowOpen)} and ${fmt(windowClose)}`,
+//             });
+//         }
+
+//         // ─────────────────────────────────────────────
+//         // WEEKEND CHECK
+//         // ─────────────────────────────────────────────
+//         if (now.day() === 0 || now.day() === 6) {
+//             return res.status(400).json({
+//                 success: false,
+//                 message: "Office is closed on weekends",
+//             });
+//         }
+
+//         // ─────────────────────────────────────────────
+//         // HOLIDAY CHECK
+//         // ─────────────────────────────────────────────
+//         const holiday = await Holiday.findOne({
+//             date: {
+//                 $gte: todayStart,
+//                 $lte: todayEnd,
+//             },
+//         });
+
+//         if (holiday) {
+//             return res.status(400).json({
+//                 success: false,
+//                 message: `Today is a holiday: ${holiday.name}`,
+//             });
+//         }
+
+//         // ─────────────────────────────────────────────
+//         // LEAVE CHECK
+//         // ─────────────────────────────────────────────
+//         // FIX #14: only block full-day leaves; half-day leaves allow punch-in (mark isHalfDay automatically)
+//         const leave = await Leave.findOne({
+//             user: userId,
+//             status: "approved",
+//             fromDate: { $lte: todayEnd },
+//             toDate: { $gte: todayStart },
+//         });
+
+//         if (leave) {
+//             const isHalfDayLeave = leave.leaveType === "half-day" || leave.halfDay === true;
+//             if (!isHalfDayLeave) {
+//                 return res.status(400).json({
+//                     success: false,
+//                     message: "You are on approved leave",
+//                 });
+//             }
+//             // Half-day leave: allow punch-in but pre-mark isHalfDay
+//             // This flag will be picked up below when saving the attendance record
+//             req._halfDayLeave = true;
+//         }
+
+
+//         // ─────────────────────────────────────────────
+//         // DEVICE / LOCATION VERIFICATION
+//         // ─────────────────────────────────────────────
+
+//         let verifiedBy = null;
+//         let clientIP = (req.socket?.remoteAddress || "").replace(/^::ffff:/, "");
+
+//         if (isOfflinePunch) {
+//             verifiedBy = "offline";
+
+//         } else {
+//             // ── STEP 1: Try device verification first ────────────────────
+//             let deviceMatched = false;
+
+//             if (deviceUUID && productId) {
+//                 const incomingUUID = deviceUUID.trim().toUpperCase();
+//                 const incomingProduct = productId.trim().toUpperCase();
+
+//                 // ✅ Match by both UUID + ProductId
+//                 let matchedDevice = ALLOWED_DEVICES.find(d => {
+//                     const uuidOk = d.deviceUUID.trim().toUpperCase() === incomingUUID;
+//                     const productOk = d.productId.trim().toUpperCase() === incomingProduct;
+//                     return uuidOk && productOk;
+//                 });
+
+//                 // ✅ Fallback — match by ProductId only
+//                 // UUID 03000200 is generic/shared across many PCs
+//                 if (!matchedDevice) {
+//                     matchedDevice = ALLOWED_DEVICES.find(d =>
+//                         d.productId.trim().toUpperCase() === incomingProduct
+//                     );
+//                 }
+
+//                 if (matchedDevice) {
+//                     verifiedBy = "device";
+//                     deviceMatched = true;
+//                 } else {
+//                     console.log(`❌ Not matched — Please Check Your Ids`);
+//                 }
+//             }
+
+//             // ── STEP 2: Device not matched → try location ────────────────
+//             if (!deviceMatched) {
+//                 if (lat === undefined || lat === null || lng === undefined || lng === null) {
+//                     return res.status(403).json({
+//                         success: false,
+//                         message: "Device not recognised. Please enable GPS to punch in from your current location.",
+//                     });
+//                 }
+
+//                 if (isNaN(Number(lat)) || isNaN(Number(lng))) {
+//                     return res.status(400).json({
+//                         success: false,
+//                         message: "Invalid location coordinates received.",
+//                     });
+//                 }
+
+//                 const dist = getDistance(Number(lat), Number(lng), OFFICE_LAT, OFFICE_LNG);
+
+//                 if (dist > GEOFENCE_RADIUS) {
+//                     return res.status(403).json({
+//                         success: false,
+//                         message: `You are ${Math.round(dist)}m away from office. Move closer or use an authorised office computer.`,
+//                     });
+//                 }
+
+//                 if (accuracy !== undefined && Number(accuracy) > 150) {
+//                     return res.status(403).json({
+//                         success: false,
+//                         message: "GPS accuracy is too low. Please try again in open space.",
+//                     });
+//                 }
+//                 verifiedBy = "location";
+//             }
+//         }
+
+//         // ─────────────────────────────────────────────
+//         // DUPLICATE CHECK
+//         // ─────────────────────────────────────────────
+//         const existing = await Attendance.findOne({
+//             user: userId,
+//             dateString: todayString,
+//         })
+//             .select("_id punchOut")
+//             .lean();
+
+//         if (existing) {
+//             return res.status(400).json({
+//                 success: false,
+//                 message: existing.punchOut
+//                     ? "Attendance already completed for today"
+//                     : "Already punched in — please punch out first",
+//             });
+//         }
+
+//         // ─────────────────────────────────────────────
+//         // DEVICE VALIDATION
+//         // ─────────────────────────────────────────────
+//         if (deviceId) {
+
+//             const lastAttendance = await Attendance
+//                 .findOne({ user: userId })
+//                 .sort({ createdAt: -1 })
+//                 .select("deviceId")
+//                 .lean();
+
+//             if (
+//                 lastAttendance &&
+//                 lastAttendance.deviceId &&
+//                 lastAttendance.deviceId !== deviceId
+//             ) {
+//                 const io = req.app.get("io");
+
+//                 // Fire-and-forget — device alert must never crash punch-in
+//                 createNotification(
+//                     io,
+//                     userId,
+//                     "⚠️ Device Changed",
+//                     `${req.user.name} used a new device for attendance`,
+//                     "security",
+//                     {
+//                         userId,
+//                         oldDevice: lastAttendance.deviceId,
+//                         newDevice: deviceId,
+//                     }
+//                 ).catch(err => console.error("Device change notification error:", err));
+//             }
+//         }
+
+//         // ─────────────────────────────────────────────
+//         // LATE / HALF DAY LOGIC
+//         // ─────────────────────────────────────────────
+//         const sc = getShiftConfig(userDoc?.shift);
+
+//         const monthStart = now.clone().startOf("month").toDate();
+//         const monthEnd = now.clone().endOf("month").toDate();
+
+//         const lateCount = await Attendance.countDocuments({
+//             user: userId,
+//             date: { $gte: monthStart, $lte: monthEnd },
+//             isLate: true,
+//         });
+
+//         // FIX #1: removed duplicate `const now = rawNow` re-declaration
+//         // `now` is already the correct IST moment from the top of punchIn
+//         const totalMinutes = now.hour() * 60 + now.minute();
+
+//         let isLate = false;
+//         let isHalfDay = false;
+//         let status = "present";
+
+//         if (sc.isDefaultShift) {
+//             // ── DEFAULT 10:00–19:00 shift: full 3-quota logic ──────────
+//             if (lateCount < MONTHLY_LATE_QUOTA) {
+//                 // Phase 1
+//                 if (totalMinutes <= sc.lateTrigger) {
+//                     // on time
+//                 } else if (totalMinutes <= sc.halfDayCutoff) {
+//                     isLate = true;
+//                     status = "present";
+//                 } else {
+//                     isHalfDay = true;
+//                     status = "half-day";
+//                 }
+//             } else {
+//                 // Phase 2 — quota exhausted
+//                 if (totalMinutes <= sc.onTimeCutoffP2) {
+//                     // on time (within 5-min grace)
+//                 } else {
+//                     isHalfDay = true;
+//                     status = "half-day";
+//                 }
+//             }
+//         } else {
+//             // ── CUSTOM shift: simple late / half-day, NO quota ──────────
+//             if (totalMinutes <= sc.lateTrigger) {
+//                 // on time
+//             } else if (totalMinutes <= sc.halfDayCutoff) {
+//                 isLate = true;
+//                 status = "present";
+//             } else {
+//                 isHalfDay = true;
+//                 status = "half-day";
+//             }
+//         }
+
+//         // ─────────────────────────────────────────────
+//         // LATE MINUTES
+//         // ─────────────────────────────────────────────
+//         // FIX #3: derive shift start from sc.shiftStart (minutes from midnight) not hardcoded 10:00
+//         const shiftStartHour = Math.floor(sc.shiftStart / 60);
+//         const shiftStartMinute = sc.shiftStart % 60;
+
+//         const shiftStart = now.clone()
+//             .hour(shiftStartHour)
+//             .minute(shiftStartMinute)
+//             .second(0);
+
+//         const lateMinutes =
+//             isLate
+//                 ? Math.max(0, now.diff(shiftStart, "minutes"))
+//                 : 0;
+
+//         // ─────────────────────────────────────────────
+//         // SAVE ATTENDANCE
+//         // ─────────────────────────────────────────────
+//         let attendance;
+
+//         try {
+//             if (req._halfDayLeave) {
+//                 isHalfDay = true;
+//                 status = "half-day";
+//             }
+
+//             attendance = await Attendance.create({
+//                 user: userId,
+//                 date: todayStart,
+//                 dateString: todayString,
+//                 punchIn: nowDate,
+//                 lateMinutes,
+//                 isLate,
+//                 isHalfDay,
+//                 status,
+//                 location: {
+//                     lat,
+//                     lng,
+//                     accuracy,
+//                 },
+//                 deviceId: deviceId || "",
+//                 deviceUUID: deviceUUID || "",   // Windows hardware UUID
+//                 productId: productId || "",   // Windows Product ID
+//                 wifiSSID: wifiSSID || "",
+//                 isOfflinePunch: !!isOfflinePunch,
+//                 syncedAt: isOfflinePunch
+//                     ? serverNow.toDate()
+//                     : null,
+//                 verifiedBy,   // "device" | "device_partial" | "location" | "offline"
+//                 clientIP,
+//             });
+
+//         } catch (err) {
+
+//             // Handle duplicate race condition
+//             if (err.code === 11000) {
+//                 return res.status(400).json({
+//                     success: false,
+//                     message: "Attendance already exists for today",
+//                 });
+//             }
+
+//             throw err;
+//         }
+
+//         // ─────────────────────────────────────────────
+//         // EMAIL ALERT
+//         // ─────────────────────────────────────────────
+//         if (isHalfDay || isLate) {
+//             if (userDoc?.email) {
+//                 sendMail({
+//                     to: userDoc.email,
+//                     subject: isHalfDay
+//                         ? "⚠️ Half Day Marked"
+//                         : "⏰ Late Arrival Recorded",
+//                     html: `
+//             <p>
+//                 Hi ${userDoc.name},
+//                 your punch-in at
+//                 <b>${formatTime(nowDate)}</b>
+//                 has been recorded as
+//                 <b>${isHalfDay ? "Half Day" : "Late"}</b>.
+//             </p>
+//         `,
+//                 }).catch(err =>
+//                     console.error("Email error:", err)
+//                 );
+//             }
+//         }
+
+//         // ─────────────────────────────────────────────
+//         // HR / MANAGER NOTIFICATIONS
+//         // ─────────────────────────────────────────────
+//         const io = req.app.get("io");
+
+//         // ─────────────────────────────────────────────
+//         // START DESKTOP TRACKER
+//         // ─────────────────────────────────────────────
+
+//         io.to(`user_${userId}`).emit(
+//             "tracker:start",
+//             {
+//                 attendanceId: attendance._id,
+//                 timestamp: new Date(),
+//             }
+//         );
+
+//         const employeeName =
+//             req.user.name || "An employee";
+
+//         const punchTime = formatTime(nowDate);
+
+//         let statusLabel = "✅ On Time";
+
+//         if (isHalfDay) {
+//             statusLabel = "⚠️ Half Day";
+//         } else if (isLate) {
+//             statusLabel = `⏰ Late (+${lateMinutes}m)`;
+//         }
+
+//         // ─────────────────────────────────────────────
+//         // HR / TL / MANAGER NOTIFICATIONS ONLY
+//         // ─────────────────────────────────────────────
+//         const notifyUsersRaw = await User.find({
+//             $or: [
+//                 { role: { $in: ["hr", "manager", "admin"] } },
+//                 ...(userDoc?.reportingTo
+//                     ? [{ _id: userDoc.reportingTo }]
+//                     : []),
+//             ]
+//         })
+//             .select("_id")
+//             .lean();
+
+//         // Deduplicate by string ID to avoid double-notifying
+//         const notifyIdSet = new Set();
+//         for (const u of notifyUsersRaw) {
+//             const sid = u._id.toString();
+//             if (sid !== userId.toString()) notifyIdSet.add(sid);
+//         }
+
+//         res.status(201).json({
+//             success: true,
+//             message: "Punch-in successful",
+//             attendance,
+//             lateQuotaUsed: isLate ? lateCount + 1 : lateCount,
+//             lateQuotaMax: MONTHLY_LATE_QUOTA,
+//         });
+
+//         setImmediate(() => {
+//             Promise.allSettled(
+//                 [...notifyIdSet].map(sid =>
+//                     createNotification(
+//                         io,
+//                         sid,
+//                         `${employeeName} Punched In`,
+//                         `Punched in at ${punchTime} — ${statusLabel}`,
+//                         "attendance",
+//                         {
+//                             userId,
+//                             attendanceId: attendance._id,
+//                             status,
+//                             isLate,
+//                             isHalfDay,
+//                         }
+//                     )
+//                 )
+//             ).catch(err =>
+//                 console.error("Notification error:", err)
+//             );
+//         });
+
+//         return;
+
+//     } catch (error) {
+
+//         console.error("PunchIn Error:", error);
+
+//         res.status(500).json({
+//             success: false,
+//             message: error.message,
+//         });
+//     }
+// };
+
+
+
 const punchIn = async (req, res) => {
     try {
         const userId = req.user._id;
@@ -166,16 +691,15 @@ const punchIn = async (req, res) => {
             lng,
             accuracy,
         } = req.body || {};
+
         // ─────────────────────────────────────────────
-        // INDIA TIMEZONE
+        // STEP 1 — COMPUTE TIMESTAMPS FIRST (no DB)
         // ─────────────────────────────────────────────
         const serverNow = moment().tz("Asia/Kolkata");
 
-        // Offline timestamp validation
         let now = serverNow.clone();
 
         if (isOfflinePunch) {
-
             if (!offlineTimestamp) {
                 return res.status(400).json({
                     success: false,
@@ -183,8 +707,7 @@ const punchIn = async (req, res) => {
                 });
             }
 
-            const parsedOfflineTime = moment
-                .tz(offlineTimestamp, "Asia/Kolkata");
+            const parsedOfflineTime = moment.tz(offlineTimestamp, "Asia/Kolkata");
 
             if (!parsedOfflineTime.isValid()) {
                 return res.status(400).json({
@@ -193,7 +716,6 @@ const punchIn = async (req, res) => {
                 });
             }
 
-            // Allow only last 2 hours offline sync
             const diffMinutes = serverNow.diff(parsedOfflineTime, "minutes");
 
             if (diffMinutes > 120) {
@@ -203,7 +725,6 @@ const punchIn = async (req, res) => {
                 });
             }
 
-            // Prevent future timestamps
             if (diffMinutes < 0) {
                 return res.status(400).json({
                     success: false,
@@ -215,48 +736,15 @@ const punchIn = async (req, res) => {
         }
 
         const nowDate = now.toDate();
-
-        // Attendance date
         const todayStart = now.clone().startOf("day").toDate();
         const todayEnd = now.clone().endOf("day").toDate();
         const todayString = now.clone().format("YYYY-MM-DD");
+        const monthStart = now.clone().startOf("month").toDate();
+        const monthEnd = now.clone().endOf("month").toDate();
+        const totalMinutes = now.hour() * 60 + now.minute();
 
         // ─────────────────────────────────────────────
-        // OFFICE TIMING CHECK (shift-aware)
-        // ─────────────────────────────────────────────
-        // Load shift config early so we can use shiftStart for the timing window.
-        // We re-use userDoc fetched below; fetch it here temporarily.
-        const userDocForTiming = await User.findById(userId).select("shift").lean();
-        const scForTiming = getShiftConfig(userDocForTiming?.shift);
-
-        // Allow punch-in from 1 hour before shift start up to 1 hour after shift end.
-        // This handles overnight shifts (e.g. 13:00–01:00) by comparing in total minutes
-        // with wrap-around support.
-        const totalMinutesNow = now.hour() * 60 + now.minute();
-
-        const windowOpen = (scForTiming.shiftStart - 60 + 1440) % 1440;  // 1 hr before start
-        const windowClose = (scForTiming.shiftEnd + 60) % 1440;          // 1 hr after end
-
-        // Overnight window: windowOpen > windowClose (e.g. 720 open, 120 close for 1 PM–1 AM)
-        const inWindow = windowOpen <= windowClose
-            ? totalMinutesNow >= windowOpen && totalMinutesNow <= windowClose
-            : totalMinutesNow >= windowOpen || totalMinutesNow <= windowClose;
-
-        if (!inWindow) {
-            const fmt = (m) => {
-                const h = Math.floor(m / 60) % 24;
-                const min = m % 60;
-                const ap = h >= 12 ? "PM" : "AM";
-                return `${h % 12 || 12}:${String(min).padStart(2, "0")} ${ap}`;
-            };
-            return res.status(400).json({
-                success: false,
-                message: `Punch-in allowed only between ${fmt(windowOpen)} and ${fmt(windowClose)}`,
-            });
-        }
-
-        // ─────────────────────────────────────────────
-        // WEEKEND CHECK
+        // STEP 2 — WEEKEND CHECK (no DB, free)
         // ─────────────────────────────────────────────
         if (now.day() === 0 || now.day() === 6) {
             return res.status(400).json({
@@ -266,15 +754,41 @@ const punchIn = async (req, res) => {
         }
 
         // ─────────────────────────────────────────────
-        // HOLIDAY CHECK
+        // STEP 3 — ALL DB READS IN PARALLEL
         // ─────────────────────────────────────────────
-        const holiday = await Holiday.findOne({
-            date: {
-                $gte: todayStart,
-                $lte: todayEnd,
-            },
-        });
+        const [userDoc, holiday, leave, existing, lateCount] = await Promise.all([
 
+            User.findById(userId)
+                .select("shift reportingTo email name")
+                .lean(),
+
+            Holiday.findOne({
+                date: { $gte: todayStart, $lte: todayEnd },
+            }).lean(),
+
+            Leave.findOne({
+                user: userId,
+                status: "approved",
+                fromDate: { $lte: todayEnd },
+                toDate: { $gte: todayStart },
+            }).lean(),
+
+            Attendance.findOne({ user: userId, dateString: todayString })
+                .select("_id punchOut")
+                .lean(),
+
+            Attendance.countDocuments({
+                user: userId,
+                date: { $gte: monthStart, $lte: monthEnd },
+                isLate: true,
+            }),
+        ]);
+
+        // ─────────────────────────────────────────────
+        // STEP 4 — GUARD CHECKS (memory only, no DB)
+        // ─────────────────────────────────────────────
+
+        // Holiday
         if (holiday) {
             return res.status(400).json({
                 success: false,
@@ -282,17 +796,8 @@ const punchIn = async (req, res) => {
             });
         }
 
-        // ─────────────────────────────────────────────
-        // LEAVE CHECK
-        // ─────────────────────────────────────────────
-        // FIX #14: only block full-day leaves; half-day leaves allow punch-in (mark isHalfDay automatically)
-        const leave = await Leave.findOne({
-            user: userId,
-            status: "approved",
-            fromDate: { $lte: todayEnd },
-            toDate: { $gte: todayStart },
-        });
-
+        // Leave
+        let isHalfDayLeaveOverride = false;
         if (leave) {
             const isHalfDayLeave = leave.leaveType === "half-day" || leave.halfDay === true;
             if (!isHalfDayLeave) {
@@ -301,42 +806,65 @@ const punchIn = async (req, res) => {
                     message: "You are on approved leave",
                 });
             }
-            // Half-day leave: allow punch-in but pre-mark isHalfDay
-            // This flag will be picked up below when saving the attendance record
-            req._halfDayLeave = true;
+            isHalfDayLeaveOverride = true;
         }
 
+        // Duplicate punch-in
+        if (existing) {
+            return res.status(400).json({
+                success: false,
+                message: existing.punchOut
+                    ? "Attendance already completed for today"
+                    : "Already punched in — please punch out first",
+            });
+        }
 
         // ─────────────────────────────────────────────
-        // DEVICE / LOCATION VERIFICATION
+        // STEP 5 — SHIFT WINDOW CHECK
         // ─────────────────────────────────────────────
-        const userDoc = await User.findById(userId)
-            .select("shift reportingTo")
-            .lean();
+        const sc = getShiftConfig(userDoc?.shift);
+        const windowOpen = (sc.shiftStart - 60 + 1440) % 1440;
+        const windowClose = (sc.shiftEnd + 60) % 1440;
 
+        const inWindow = windowOpen <= windowClose
+            ? totalMinutes >= windowOpen && totalMinutes <= windowClose
+            : totalMinutes >= windowOpen || totalMinutes <= windowClose;
+
+        if (!inWindow) {
+            const fmt = (m) => {
+                const h = Math.floor(m / 60) % 24;
+                const mn = m % 60;
+                const ap = h >= 12 ? "PM" : "AM";
+                return `${h % 12 || 12}:${String(mn).padStart(2, "0")} ${ap}`;
+            };
+            return res.status(400).json({
+                success: false,
+                message: `Punch-in allowed only between ${fmt(windowOpen)} and ${fmt(windowClose)}`,
+            });
+        }
+
+        // ─────────────────────────────────────────────
+        // STEP 6 — DEVICE / LOCATION VERIFICATION
+        // ─────────────────────────────────────────────
         let verifiedBy = null;
-        let clientIP = (req.socket?.remoteAddress || "").replace(/^::ffff:/, "");
+        const clientIP = (req.socket?.remoteAddress || "").replace(/^::ffff:/, "");
 
         if (isOfflinePunch) {
             verifiedBy = "offline";
 
         } else {
-            // ── STEP 1: Try device verification first ────────────────────
             let deviceMatched = false;
 
             if (deviceUUID && productId) {
                 const incomingUUID = deviceUUID.trim().toUpperCase();
                 const incomingProduct = productId.trim().toUpperCase();
 
-                // ✅ Match by both UUID + ProductId
-                let matchedDevice = ALLOWED_DEVICES.find(d => {
-                    const uuidOk = d.deviceUUID.trim().toUpperCase() === incomingUUID;
-                    const productOk = d.productId.trim().toUpperCase() === incomingProduct;
-                    return uuidOk && productOk;
-                });
+                let matchedDevice = ALLOWED_DEVICES.find(d =>
+                    d.deviceUUID.trim().toUpperCase() === incomingUUID &&
+                    d.productId.trim().toUpperCase() === incomingProduct
+                );
 
-                // ✅ Fallback — match by ProductId only
-                // UUID 03000200 is generic/shared across many PCs
+                // Fallback — match by ProductId only (generic UUIDs)
                 if (!matchedDevice) {
                     matchedDevice = ALLOWED_DEVICES.find(d =>
                         d.productId.trim().toUpperCase() === incomingProduct
@@ -346,14 +874,11 @@ const punchIn = async (req, res) => {
                 if (matchedDevice) {
                     verifiedBy = "device";
                     deviceMatched = true;
-                } else {
-                    console.log(`❌ Not matched — Please Check Your Ids`);
                 }
             }
 
-            // ── STEP 2: Device not matched → try location ────────────────
             if (!deviceMatched) {
-                if (lat === undefined || lat === null || lng === undefined || lng === null) {
+                if (lat == null || lng == null) {
                     return res.status(403).json({
                         success: false,
                         message: "Device not recognised. Please enable GPS to punch in from your current location.",
@@ -382,85 +907,72 @@ const punchIn = async (req, res) => {
                         message: "GPS accuracy is too low. Please try again in open space.",
                     });
                 }
+
                 verifiedBy = "location";
             }
         }
 
         // ─────────────────────────────────────────────
-        // DUPLICATE CHECK
+        // STEP 7 — DEVICE CHANGE ALERT (fire-and-forget)
         // ─────────────────────────────────────────────
-        const existing = await Attendance.findOne({
-            user: userId,
-            dateString: todayString,
-        });
-
-        if (existing) {
-            return res.status(400).json({
-                success: false,
-                message: existing.punchOut
-                    ? "Attendance already completed for today"
-                    : "Already punched in — please punch out first",
-            });
-        }
-
-        // ─────────────────────────────────────────────
-        // DEVICE VALIDATION
-        // ─────────────────────────────────────────────
+        // Runs async — never awaited, never blocks punch-in
         if (deviceId) {
-
-            const lastAttendance = await Attendance
+            Attendance
                 .findOne({ user: userId })
-                .sort({ createdAt: -1 });
-
-            if (
-                lastAttendance &&
-                lastAttendance.deviceId &&
-                lastAttendance.deviceId !== deviceId
-            ) {
-                const io = req.app.get("io");
-
-                // Fire-and-forget — device alert must never crash punch-in
-                createNotification(
-                    io,
-                    userId,
-                    "⚠️ Device Changed",
-                    `${req.user.name} used a new device for attendance`,
-                    "security",
-                    {
-                        userId,
-                        oldDevice: lastAttendance.deviceId,
-                        newDevice: deviceId,
+                .sort({ createdAt: -1 })
+                .select("deviceId")
+                .lean()
+                .then(lastAttendance => {
+                    if (
+                        lastAttendance?.deviceId &&
+                        lastAttendance.deviceId !== deviceId
+                    ) {
+                        const io = req.app.get("io");
+                        createNotification(
+                            io,
+                            userId,
+                            "⚠️ Device Changed",
+                            `${req.user.name} used a new device for attendance`,
+                            "security",
+                            {
+                                userId,
+                                oldDevice: lastAttendance.deviceId,
+                                newDevice: deviceId,
+                            }
+                        ).catch(err => console.error("Device change notification error:", err));
                     }
-                ).catch(err => console.error("Device change notification error:", err));
-            }
+                })
+                .catch(err => console.error("Device history lookup error:", err));
         }
 
         // ─────────────────────────────────────────────
-        // LATE / HALF DAY LOGIC
+        // STEP 8 — LATE / HALF-DAY LOGIC
         // ─────────────────────────────────────────────
-        const sc = getShiftConfig(userDoc?.shift);
-
-        const monthStart = now.clone().startOf("month").toDate();
-        const monthEnd = now.clone().endOf("month").toDate();
-
-        const lateCount = await Attendance.countDocuments({
-            user: userId,
-            date: { $gte: monthStart, $lte: monthEnd },
-            isLate: true,
-        });
-
-        // FIX #1: removed duplicate `const now = rawNow` re-declaration
-        // `now` is already the correct IST moment from the top of punchIn
-        const totalMinutes = now.hour() * 60 + now.minute();
-
         let isLate = false;
-        let isHalfDay = false;
-        let status = "present";
+        let isHalfDay = isHalfDayLeaveOverride; // pre-set if half-day leave
+        let status = isHalfDayLeaveOverride ? "half-day" : "present";
 
-        if (sc.isDefaultShift) {
-            // ── DEFAULT 10:00–19:00 shift: full 3-quota logic ──────────
-            if (lateCount < MONTHLY_LATE_QUOTA) {
-                // Phase 1
+        if (!isHalfDayLeaveOverride) {
+            if (sc.isDefaultShift) {
+                if (lateCount < MONTHLY_LATE_QUOTA) {
+                    if (totalMinutes <= sc.lateTrigger) {
+                        // on time
+                    } else if (totalMinutes <= sc.halfDayCutoff) {
+                        isLate = true;
+                        status = "present";
+                    } else {
+                        isHalfDay = true;
+                        status = "half-day";
+                    }
+                } else {
+                    // Quota exhausted — tighter grace
+                    if (totalMinutes > sc.onTimeCutoffP2) {
+                        isHalfDay = true;
+                        status = "half-day";
+                    }
+                }
+            } else {
+                // Custom shift — simple late / half-day, no quota
                 if (totalMinutes <= sc.lateTrigger) {
                     // on time
                 } else if (totalMinutes <= sc.halfDayCutoff) {
@@ -470,56 +982,26 @@ const punchIn = async (req, res) => {
                     isHalfDay = true;
                     status = "half-day";
                 }
-            } else {
-                // Phase 2 — quota exhausted
-                if (totalMinutes <= sc.onTimeCutoffP2) {
-                    // on time (within 5-min grace)
-                } else {
-                    isHalfDay = true;
-                    status = "half-day";
-                }
-            }
-        } else {
-            // ── CUSTOM shift: simple late / half-day, NO quota ──────────
-            if (totalMinutes <= sc.lateTrigger) {
-                // on time
-            } else if (totalMinutes <= sc.halfDayCutoff) {
-                isLate = true;
-                status = "present";
-            } else {
-                isHalfDay = true;
-                status = "half-day";
             }
         }
 
         // ─────────────────────────────────────────────
-        // LATE MINUTES
+        // STEP 9 — LATE MINUTES
         // ─────────────────────────────────────────────
-        // FIX #3: derive shift start from sc.shiftStart (minutes from midnight) not hardcoded 10:00
-        const shiftStartHour = Math.floor(sc.shiftStart / 60);
-        const shiftStartMinute = sc.shiftStart % 60;
-
         const shiftStart = now.clone()
-            .hour(shiftStartHour)
-            .minute(shiftStartMinute)
+            .hour(Math.floor(sc.shiftStart / 60))
+            .minute(sc.shiftStart % 60)
             .second(0);
 
-        const lateMinutes =
-            isLate
-                ? Math.max(0, now.diff(shiftStart, "minutes"))
-                : 0;
+        const lateMinutes = isLate
+            ? Math.max(0, now.diff(shiftStart, "minutes"))
+            : 0;
 
         // ─────────────────────────────────────────────
-        // SAVE ATTENDANCE
+        // STEP 10 — SAVE ATTENDANCE
         // ─────────────────────────────────────────────
         let attendance;
-
         try {
-            if (req._halfDayLeave) {
-                isHalfDay = true;
-                status = "half-day";
-            }
-
             attendance = await Attendance.create({
                 user: userId,
                 date: todayStart,
@@ -529,155 +1011,119 @@ const punchIn = async (req, res) => {
                 isLate,
                 isHalfDay,
                 status,
-                location: {
-                    lat,
-                    lng,
-                    accuracy,
-                },
+                location: { lat, lng, accuracy },
                 deviceId: deviceId || "",
-                deviceUUID: deviceUUID || "",   // Windows hardware UUID
-                productId: productId || "",   // Windows Product ID
+                deviceUUID: deviceUUID || "",
+                productId: productId || "",
                 wifiSSID: wifiSSID || "",
                 isOfflinePunch: !!isOfflinePunch,
-                syncedAt: isOfflinePunch
-                    ? serverNow.toDate()
-                    : null,
-                verifiedBy,   // "device" | "device_partial" | "location" | "offline"
+                syncedAt: isOfflinePunch ? serverNow.toDate() : null,
+                verifiedBy,
                 clientIP,
             });
-
         } catch (err) {
-
-            // Handle duplicate race condition
             if (err.code === 11000) {
                 return res.status(400).json({
                     success: false,
                     message: "Attendance already exists for today",
                 });
             }
-
             throw err;
         }
 
         // ─────────────────────────────────────────────
-        // EMAIL ALERT
-        // ─────────────────────────────────────────────
-        if (isHalfDay || isLate) {
-            User.findById(userId).select("email name").then(employee => {
-                if (!employee) return;
-                sendMail({
-                    to: employee.email,
-                    subject: isHalfDay
-                        ? "⚠️ Half Day Marked"
-                        : "⏰ Late Arrival Recorded",
-                    html: `
-                <p>
-                    Hi ${employee.name},
-                    your punch-in at
-                    <b>${formatTime(nowDate)}</b>
-                    has been recorded as
-                    <b>${isHalfDay ? "Half Day" : "Late"}</b>.
-                </p>
-            `,
-                }).catch(err => console.error("Email error (punchIn):", err));
-            }).catch(err => console.error("User fetch error (punchIn):", err));
-        }
-
-        // ─────────────────────────────────────────────
-        // HR / MANAGER NOTIFICATIONS
+        // STEP 11 — RESPOND IMMEDIATELY
         // ─────────────────────────────────────────────
         const io = req.app.get("io");
 
-        // ─────────────────────────────────────────────
-        // START DESKTOP TRACKER
-        // ─────────────────────────────────────────────
+        io.to(`user_${userId}`).emit("tracker:start", {
+            attendanceId: attendance._id,
+            timestamp: new Date(),
+        });
 
-        io.to(`user_${userId}`).emit(
-            "tracker:start",
-            {
-                attendanceId: attendance._id,
-                timestamp: new Date(),
-            }
-        );
-
-        const employeeName =
-            req.user.name || "An employee";
-
-        const punchTime = formatTime(nowDate);
-
-        let statusLabel = "✅ On Time";
-
-        if (isHalfDay) {
-            statusLabel = "⚠️ Half Day";
-        } else if (isLate) {
-            statusLabel = `⏰ Late (+${lateMinutes}m)`;
-        }
-
-        // ─────────────────────────────────────────────
-        // HR / TL / MANAGER NOTIFICATIONS ONLY
-        // ─────────────────────────────────────────────
-        const notifyUsersRaw = await User.find({
-            $or: [
-                { role: { $in: ["hr", "manager", "admin"] } },
-                ...(userDoc?.reportingTo ? [{ _id: userDoc.reportingTo }] : []),
-            ]
-        }).select("_id");
-
-        // Deduplicate by string ID to avoid double-notifying
-        const notifyIdSet = new Set();
-        for (const u of notifyUsersRaw) {
-            const sid = u._id.toString();
-            if (sid !== userId.toString()) notifyIdSet.add(sid);
-        }
-
-        await Promise.allSettled(
-            [...notifyIdSet].map(sid =>
-                createNotification(
-                    io,
-                    sid,
-                    `${employeeName} Punched In`,
-                    `Punched in at ${punchTime} — ${statusLabel}`,
-                    "attendance",
-                    {
-                        userId,
-                        attendanceId: attendance._id,
-                        status,
-                        isLate,
-                        isHalfDay,
-                    }
-                )
-            )
-        );
-
-        // ─────────────────────────────────────────────
-        // SUCCESS RESPONSE
-        // ─────────────────────────────────────────────
         res.status(201).json({
             success: true,
             message: "Punch-in successful",
-
             attendance,
+            lateQuotaUsed: isLate ? lateCount + 1 : lateCount,
+            lateQuotaMax: MONTHLY_LATE_QUOTA,
+        });
 
-            lateQuotaUsed:
-                isLate
-                    ? lateCount + 1
-                    : lateCount,
+        // ─────────────────────────────────────────────
+        // STEP 12 — POST-RESPONSE SIDE EFFECTS
+        // Everything below runs AFTER the client gets 201
+        // ─────────────────────────────────────────────
+        setImmediate(async () => {
+            try {
+                const employeeName = req.user.name || "An employee";
+                const punchTime = formatTime(nowDate);
 
-            lateQuotaMax:
-                MONTHLY_LATE_QUOTA,
+                let statusLabel = "✅ On Time";
+                if (isHalfDay) statusLabel = "⚠️ Half Day";
+                else if (isLate) statusLabel = `⏰ Late (+${lateMinutes}m)`;
+
+                // Email alert
+                if ((isHalfDay || isLate) && userDoc?.email) {
+                    sendMail({
+                        to: userDoc.email,
+                        subject: isHalfDay ? "⚠️ Half Day Marked" : "⏰ Late Arrival Recorded",
+                        html: `
+                            <p>
+                                Hi ${userDoc.name}, your punch-in at
+                                <b>${formatTime(nowDate)}</b> has been recorded as
+                                <b>${isHalfDay ? "Half Day" : "Late"}</b>.
+                            </p>
+                        `,
+                    }).catch(err => console.error("Email error:", err));
+                }
+
+                // HR / Manager notifications — fetched here, not before response
+                const notifyUsersRaw = await User.find({
+                    $or: [
+                        { role: { $in: ["hr", "manager", "admin"] } },
+                        ...(userDoc?.reportingTo ? [{ _id: userDoc.reportingTo }] : []),
+                    ],
+                })
+                    .select("_id")
+                    .lean();
+
+                const notifyIdSet = new Set(
+                    notifyUsersRaw
+                        .map(u => u._id.toString())
+                        .filter(sid => sid !== userId.toString())
+                );
+
+                await Promise.allSettled(
+                    [...notifyIdSet].map(sid =>
+                        createNotification(
+                            io,
+                            sid,
+                            `${employeeName} Punched In`,
+                            `Punched in at ${punchTime} — ${statusLabel}`,
+                            "attendance",
+                            {
+                                userId,
+                                attendanceId: attendance._id,
+                                status,
+                                isLate,
+                                isHalfDay,
+                            }
+                        )
+                    )
+                );
+            } catch (err) {
+                console.error("Post-response side-effect error:", err);
+            }
         });
 
     } catch (error) {
-
         console.error("PunchIn Error:", error);
-
         res.status(500).json({
             success: false,
             message: error.message,
         });
     }
 };
-
 
 const punchOut = async (req, res) => {
     try {

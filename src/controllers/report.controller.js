@@ -147,64 +147,94 @@ const getMyDashboardStats = async (req, res) => {
 
 const getHRDashboardStats = async (req, res) => {
     try {
-        // ── Core counts ─────────────────────────────────────────────
-        const totalEmployees = await User.countDocuments({
-            role: { $in: ["employee", "tl", "hr", "manager"] },
-            status: { $ne: "terminated" },
-        });
-        const pendingLeaves = await Leave.countDocuments({ status: "pending" });
 
         // ── Present today — use IST dateString to match how punchIn saves ──
         const moment = require("moment-timezone");
         const todayIST = moment().tz("Asia/Kolkata");
         const todayString = todayIST.format("YYYY-MM-DD");
-
-        const presentToday = await Attendance.countDocuments({
-            dateString: todayString,
-            status: { $in: ["present", "half-day"] },
-        });
-
         // ── Payroll count this month ─────────────────────────────────
         const currentMonth = new Date().getMonth() + 1;
         const currentYear = new Date().getFullYear();
 
-        const payrollCount = await Payroll.countDocuments({
-            month: currentMonth,
-            year: currentYear,
-        });
+        const [
+            totalEmployees,
+            pendingLeaves,
+            presentToday,
+            payrollCount
+        ] = await Promise.all([
+            User.countDocuments({
+                role: { $in: ["employee", "tl", "hr", "manager"] },
+                status: { $ne: "terminated" },
+            }),
 
-        // ── Payroll total this month ─────────────────────────────────
-        const payrollAgg = await Payroll.aggregate([
-            { $match: { month: currentMonth, year: currentYear } },
-            { $group: { _id: null, total: { $sum: "$netSalary" } } },
+            Leave.countDocuments({
+                status: "pending",
+            }),
+
+            Attendance.countDocuments({
+                dateString: todayString,
+                status: { $in: ["present", "half-day"] },
+            }),
+
+            Payroll.countDocuments({
+                month: currentMonth,
+                year: currentYear,
+            })
         ]);
+
+
+
+
+        const [
+            payrollAgg,
+            openPositionsAgg,
+            perfAgg,
+            trainings
+        ] = await Promise.all([
+            Payroll.aggregate([
+                { $match: { month: currentMonth, year: currentYear } },
+                { $group: { _id: null, total: { $sum: "$netSalary" } } }
+            ]),
+
+            Recruitment.aggregate([
+                { $match: { status: "open" } },
+                {
+                    $group: {
+                        _id: null,
+                        total: {
+                            $sum: {
+                                $subtract: ["$openings", "$filled"]
+                            }
+                        }
+                    }
+                }
+            ]),
+
+            Performance.aggregate([
+                { $match: { quarter } },
+                { $group: { _id: null, avg: { $avg: "$score" } } }
+            ]),
+
+            Training.find({ status: "active" })
+        ]);
+
+
         const payrollTotal = payrollAgg[0]?.total || 0;
 
         // ── Open positions ───────────────────────────────────────────
-        const openPositionsAgg = await Recruitment.aggregate([
-            { $match: { status: "open" } },
-            {
-                $group: {
-                    _id: null,
-                    total: { $sum: { $subtract: ["$openings", "$filled"] } },
-                },
-            },
-        ]);
+
         const openPositions = openPositionsAgg[0]?.total || 0;
 
         // ── Avg performance this quarter ─────────────────────────────
         const quarter = `Q${Math.ceil(currentMonth / 3)} ${currentYear}`;
 
-        const perfAgg = await Performance.aggregate([
-            { $match: { quarter } },
-            { $group: { _id: null, avg: { $avg: "$score" } } },
-        ]);
+
         const avgPerformance = perfAgg[0]?.avg
             ? parseFloat(perfAgg[0].avg.toFixed(1))
             : null;
 
         // ── Training completion rate ──────────────────────────────────
-        const trainings = await Training.find({ status: "active" });
+
         const totalCourses = trainings.length;
         let trainingCompletion = null;
 
@@ -230,36 +260,41 @@ const getHRDashboardStats = async (req, res) => {
             : 0;
 
         // ── Recent pending leaves preview ────────────────────────────
-        const recentLeaves = await Leave.find({ status: "pending" })
-            .populate("user", "name email employeeId")
-            .limit(5)
-            .sort({ createdAt: -1 });
+        const [
+            recentLeaves,
+            topPerformers,
+            payrollSummaryAgg,
+            allUsers
+        ] = await Promise.all([
+            Leave.find({ status: "pending" })
+                .populate("user", "name email employeeId")
+                .limit(5)
+                .sort({ createdAt: -1 }),
 
-        // ── Top performers this quarter ──────────────────────────────
-        const topPerformers = await Performance.find({ quarter })
-            .populate("user", "name employeeId department")
-            .sort({ score: -1 })
-            .limit(5);
+            Performance.find({ quarter })
+                .populate("user", "name employeeId department")
+                .sort({ score: -1 })
+                .limit(5),
 
-        // ── Payroll summary this month ───────────────────────────────
-        const payrollSummaryAgg = await Payroll.aggregate([
-            { $match: { month: currentMonth, year: currentYear } },
-            {
-                $group: {
-                    _id: null,
-                    grossTotal: { $sum: "$basicSalary" },
-                    deductionsTotal: { $sum: "$deductions" },
-                    netTotal: { $sum: "$netSalary" },
-                    count: { $sum: 1 },
-                },
-            },
+            Payroll.aggregate([
+                { $match: { month: currentMonth, year: currentYear } },
+                {
+                    $group: {
+                        _id: null,
+                        grossTotal: { $sum: "$basicSalary" },
+                        deductionsTotal: { $sum: "$deductions" },
+                        netTotal: { $sum: "$netSalary" },
+                        count: { $sum: 1 }
+                    }
+                }
+            ]),
+
+            User.find({
+                role: { $in: ["employee", "tl", "hr", "manager"] }
+            }).select("name dob joiningDate employeeId")
         ]);
-        const payrollSummary = payrollSummaryAgg[0] || null;
 
-        // ── Birthdays & anniversaries (next 7 days) ──────────────────
-        const allUsers = await User.find({
-            role: { $in: ["employee", "tl", "hr", "manager"] },
-        }).select("name dob joiningDate employeeId");
+        const payrollSummary = payrollSummaryAgg[0] || null;
 
         const todayD = new Date();
         const upcoming = [];

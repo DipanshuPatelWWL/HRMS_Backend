@@ -10,4 +10,9 @@ const performanceSchema = new mongoose.Schema({
     reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
 }, { timestamps: true });
 
+performanceSchema.index({
+    quarter: 1,
+    score: -1
+});
+
 module.exports = mongoose.model("Performance", performanceSchema);

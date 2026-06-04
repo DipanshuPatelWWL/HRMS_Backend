@@ -81,6 +81,17 @@ const activityLogSchema = new mongoose.Schema(
 );
 
 activityLogSchema.index({ user: 1, dateString: 1 });
-activityLogSchema.index({ user: 1, dateString: 1, appName: 1 });
+
+activityLogSchema.index({
+    user: 1,
+    dateString: 1,
+    appName: 1,
+});
+
+activityLogSchema.index({
+    user: 1,
+    dateString: 1,
+    startTime: 1,
+});
 
 module.exports = mongoose.model("ActivityLog", activityLogSchema);

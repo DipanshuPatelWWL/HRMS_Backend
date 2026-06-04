@@ -142,11 +142,15 @@ const applyLeave = async (req, res) => {
         }
 
         // ── Overlap check (normalized dates) ──────
-        const overlap = await Leave.findOne({
-            user: userId,
-            status: { $in: ["pending", "approved"] },
-            $or: [{ fromDate: { $lte: to }, toDate: { $gte: from } }],
-        });
+        const [overlap, requestingUser] = await Promise.all([
+            Leave.findOne({
+                user: userId,
+                status: { $in: ["pending", "approved"] },
+                $or: [{ fromDate: { $lte: to }, toDate: { $gte: from } }],
+            }),
+            User.findById(userId)
+                .select("role designation department")
+        ]);
 
         if (overlap) {
             return res.status(400).json({
@@ -155,8 +159,6 @@ const applyLeave = async (req, res) => {
             });
         }
 
-        // ── Determine if TL approval should be skipped ──
-        const requestingUser = await User.findById(userId).select("role designation department");
         const skipTL =
             requestingUser.role === "tl" ||
             requestingUser.designation === "Business Development Manager" ||
@@ -183,39 +185,36 @@ const applyLeave = async (req, res) => {
         });
 
         const employee = await User.findById(leave.user).select("email name");
-        await notifyLeaveAppliedEmail(employee.email, {
+        notifyLeaveAppliedEmail(employee.email, {
             employeeName: userName,
             leaveType: type,
             fromDate,
             toDate,
             days: totalDays,
             reason,
-        });
+        }).catch(err => console.error("Leave Email Error:", err));
 
 
         // ── Notify HR, Manager and TL ✅ ─────────────────────────────────────
         const io = req.app.get("io");
 
         if (skipTL) {
-            // TL approval skipped — notify only HR & Manager via broadcast (no TL needed)
-            await broadcastNotification(
+            broadcastNotification(
                 io,
                 ["hr", "manager"],
                 "New Leave Request 📋",
                 `${userName} applied for ${type} leave (${totalDays} day${totalDays > 1 ? "s" : ""})`,
                 "leave_applied",
                 { leaveId: leave._id, userId }
-            );
+            ).catch(err => console.error(err));
         } else {
-            // Notify ONLY this employee's direct TL + all HR
-            // (notifyLeaveApplied looks up applicant.reportingTo — no cross-dept spam)
-            await notifyLeaveAppliedSocket(
+            notifyLeaveAppliedSocket(
                 io,
                 userId,
                 "New Leave Request 📋",
                 `${userName} applied for ${type} leave (${totalDays} day${totalDays > 1 ? "s" : ""})`,
                 { leaveId: leave._id, userId }
-            );
+            ).catch(err => console.error(err));
         }
 
         res.status(201).json({
