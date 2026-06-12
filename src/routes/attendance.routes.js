@@ -11,7 +11,8 @@ const {
     getMonthlyAttendance,
     getWeeklyAttendanceSummary,
     getTeamAttendance,
-    getHRAttendanceOverview
+    getHRAttendanceOverview,
+    getDayWiseAttendance
 } = require("../controllers/attendance.controller");
 
 router.post(
@@ -34,5 +35,6 @@ router.get("/monthly", protect, getMonthlyAttendance);
 router.get("/weekly-summary", protect, allowRoles("hr", "manager", "superadmin"), getWeeklyAttendanceSummary);
 router.get("/team", protect, allowRoles("tl"), getTeamAttendance);
 router.get("/hr-overview", protect, allowRoles("hr", "manager", "superadmin"), getHRAttendanceOverview);
+router.get("/day-wise", protect, allowRoles("hr", "manager", "superadmin"), getDayWiseAttendance);
 
 module.exports = router;

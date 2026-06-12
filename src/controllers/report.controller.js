@@ -12,8 +12,8 @@ const getAttendanceReport = async (req, res) => {
     try {
         const { month, year } = req.query;
 
-        const start = new Date(year, month - 1, 1);
-        const end = new Date(year, month, 0, 23, 59, 59);
+        const start = moment.tz(`${year}-${String(month).padStart(2, "0")}-01`, "Asia/Kolkata").startOf("month").toDate();
+        const end = start ? moment.tz(start, "Asia/Kolkata").endOf("month").toDate() : null;
 
         const data = await Attendance.aggregate([
             {
@@ -149,12 +149,11 @@ const getHRDashboardStats = async (req, res) => {
     try {
 
         // ── Present today — use IST dateString to match how punchIn saves ──
-        const moment = require("moment-timezone");
-        const todayIST = moment().tz("Asia/Kolkata");
-        const todayString = todayIST.format("YYYY-MM-DD");
+        const nowIST = moment().tz("Asia/Kolkata");
+        const todayString = nowIST.format("YYYY-MM-DD");
         // ── Payroll count this month ─────────────────────────────────
-        const currentMonth = new Date().getMonth() + 1;
-        const currentYear = new Date().getFullYear();
+        const currentMonth = nowIST.month() + 1;
+        const currentYear = nowIST.year();
 
         const [
             totalEmployees,
@@ -183,7 +182,8 @@ const getHRDashboardStats = async (req, res) => {
         ]);
 
 
-
+        // ── Avg performance this quarter ─────────────────────────────
+        const quarter = `Q${Math.ceil(currentMonth / 3)} ${currentYear}`;
 
         const [
             payrollAgg,
@@ -225,9 +225,6 @@ const getHRDashboardStats = async (req, res) => {
 
         const openPositions = openPositionsAgg[0]?.total || 0;
 
-        // ── Avg performance this quarter ─────────────────────────────
-        const quarter = `Q${Math.ceil(currentMonth / 3)} ${currentYear}`;
-
 
         const avgPerformance = perfAgg[0]?.avg
             ? parseFloat(perfAgg[0].avg.toFixed(1))
@@ -247,8 +244,7 @@ const getHRDashboardStats = async (req, res) => {
         }
 
         // ── Employee turnover (last 30 days) ─────────────────────────
-        const thirtyDaysAgo = new Date();
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        const thirtyDaysAgo = nowIST.clone().subtract(30, "days").toDate();
 
         const inactive30 = await User.countDocuments({
             role: { $in: ["employee", "tl", "hr", "manager"] },
@@ -296,15 +292,19 @@ const getHRDashboardStats = async (req, res) => {
 
         const payrollSummary = payrollSummaryAgg[0] || null;
 
-        const todayD = new Date();
         const upcoming = [];
 
         allUsers.forEach(u => {
             // Birthday
             if (u.dob) {
-                const bday = new Date(u.dob);
-                const thisYear = new Date(todayD.getFullYear(), bday.getMonth(), bday.getDate());
-                const diff = Math.ceil((thisYear - todayD) / (1000 * 60 * 60 * 24));
+                const bday = moment.tz(u.dob, "Asia/Kolkata");
+                const thisYear = bday.clone().year(nowIST.year());
+                
+                if (thisYear.isBefore(nowIST, "day")) {
+                    thisYear.add(1, "year");
+                }
+
+                const diff = thisYear.diff(nowIST.clone().startOf("day"), "days");
                 if (diff >= 0 && diff <= 7) {
                     upcoming.push({
                         name: u.name,
@@ -317,10 +317,16 @@ const getHRDashboardStats = async (req, res) => {
             }
             // Work anniversary
             if (u.joiningDate) {
-                const jDate = new Date(u.joiningDate);
-                const anniv = new Date(todayD.getFullYear(), jDate.getMonth(), jDate.getDate());
-                const diff = Math.ceil((anniv - todayD) / (1000 * 60 * 60 * 24));
-                const years = todayD.getFullYear() - jDate.getFullYear();
+                const jDate = moment.tz(u.joiningDate, "Asia/Kolkata");
+                const anniv = jDate.clone().year(nowIST.year());
+                
+                if (anniv.isBefore(nowIST, "day")) {
+                    anniv.add(1, "year");
+                }
+
+                const diff = anniv.diff(nowIST.clone().startOf("day"), "days");
+                const years = anniv.year() - jDate.year();
+                
                 if (diff >= 0 && diff <= 7 && years > 0) {
                     upcoming.push({
                         name: u.name,

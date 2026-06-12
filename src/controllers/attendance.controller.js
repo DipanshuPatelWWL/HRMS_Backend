@@ -131,7 +131,7 @@ const getShiftConfig = (shift) => {
 //  HELPERS
 // ─────────────────────────────────────────────
 const isWeekend = (date) => {
-    const day = new Date(date).getDay();
+    const day = moment(date).tz("Asia/Kolkata").day();
     return day === 0 || day === 6;
 };
 
@@ -1797,11 +1797,6 @@ const getMonthlyAttendance = async (req, res) => {
             holidayMap[day] = h;
         });
 
-        const isWeekend = (date) => {
-            const day = date.getDay();
-            return day === 0 || day === 6;
-        };
-
         const daysInMonth = new Date(year, month, 0).getDate();
         const fullData = [];
 
@@ -1810,6 +1805,7 @@ const getMonthlyAttendance = async (req, res) => {
                 `${year}-${String(month).padStart(2, "0")}-${String(i).padStart(2, "0")}`,
                 "Asia/Kolkata"
             ).startOf("day").toDate();
+            
             if (joiningDate && currentDate < joiningDate) {
                 continue;
             }
@@ -1837,9 +1833,13 @@ const getMonthlyAttendance = async (req, res) => {
                     `${year}-${String(month).padStart(2, "0")}-${String(i).padStart(2, "0")}`,
                     "Asia/Kolkata"
                 ).format("YYYY-MM-DD");
+                
                 const todayStr = moment().tz("Asia/Kolkata").format("YYYY-MM-DD");
                 const isFuture = currentDateStr > todayStr;
-                if (isFuture) continue;
+                
+                if (isFuture) {
+                    continue;
+                }
 
                 // ── Check if this day falls within an approved leave ──
                 const onLeave = await Leave.findOne({
@@ -1964,7 +1964,7 @@ const getWeeklyAttendanceSummary = async (req, res) => {
 const getTeamAttendance = async (req, res) => {
     try {
         const tlId = req.user._id;
-        const { month, year, view = "daily" } = req.query;
+        const { month, year, view = "daily", date } = req.query;
 
         if (!month || !year) {
             return res.status(400).json({ success: false, message: "month and year are required" });
@@ -1991,7 +1991,7 @@ const getTeamAttendance = async (req, res) => {
 
         // Get holidays this month
         const holidays = await Holiday.find({ date: { $gte: start, $lte: end } });
-        const holidayDates = new Set(holidays.map(h => new Date(h.date).getDate()));
+        const holidayDates = new Set(holidays.map(h => moment(h.date).tz("Asia/Kolkata").date()));
 
         // Get leaves for team this month
         const leaves = await Leave.find({
@@ -2002,8 +2002,25 @@ const getTeamAttendance = async (req, res) => {
         }).populate("user", "name employeeId");
 
         // ── TODAY summary — use IST dateString for consistency ──────────
-        const todayIST = moment().tz("Asia/Kolkata");
+        const actualNow = moment().tz("Asia/Kolkata");
+        let todayIST = actualNow.clone();
+        
+        if (date) {
+            todayIST = moment.tz(date, "YYYY-MM-DD", "Asia/Kolkata").startOf("day");
+        }
+        
         const todayString = todayIST.format("YYYY-MM-DD");
+        const actualTodayString = actualNow.format("YYYY-MM-DD");
+
+        let nowMins;
+        if (todayIST.isBefore(actualNow, "day")) {
+            nowMins = 1440; // past date - day is over
+        } else if (todayIST.isAfter(actualNow, "day")) {
+            nowMins = 0; // future date - day hasn't started
+        } else {
+            // it is today
+            nowMins = actualNow.hour() * 60 + actualNow.minute();
+        }
 
         const yesterdayString = todayIST.clone().subtract(1, "day").format("YYYY-MM-DD");
 
@@ -2037,25 +2054,39 @@ const getTeamAttendance = async (req, res) => {
         const todaySummary = teamMembers.map(member => {
             const rec = todayRecordMap[member._id.toString()];
             const onLeave = onLeaveTodayIds.has(member._id.toString());
-            const isHolidayToday = isWeekend(today) || holidayDates.has(today.getDate());
+            const isHolidayToday = isWeekend(today) || holidayDates.has(moment(today).tz("Asia/Kolkata").date());
 
             const empSc = getShiftConfig(member.shift);
-            const nowMins = todayIST.hour() * 60 + todayIST.minute();
             const shiftNotStartedYet = nowMins < empSc.shiftStart;
 
             let attendanceStatus;
+            
+            // PRIORITY RULE:
+            // 1. Present / Late / Half-day
+            // 2. Holiday
+            // 3. Weekend
+            // 4. Leave
+            // 5. Absent
+            
             if (rec?.punchIn && rec?.punchOut) {
-                attendanceStatus = "punched_out";
+                if (rec.isHalfDay) attendanceStatus = "half_day";
+                else if (rec.isLate) attendanceStatus = "late";
+                else attendanceStatus = "present";
             } else if (rec?.punchIn) {
                 const shiftEndMins = empSc.shiftEnd === 0 ? 1440 : empSc.shiftEnd;
                 const punchInMoment = moment(rec.punchIn).tz("Asia/Kolkata");
                 const isPunchInFromYesterday = punchInMoment.format("YYYY-MM-DD") !== todayString;
                 const shiftOver = isPunchInFromYesterday || nowMins > shiftEndMins + 60;
-                attendanceStatus = shiftOver ? "missed_punchout" : "punched_in";
+                
+                if (shiftOver) attendanceStatus = "missed_punchout";
+                else if (rec.isLate) attendanceStatus = "late";
+                else attendanceStatus = "present";
+            } else if (isHolidayToday && holidayDates.has(moment(today).tz("Asia/Kolkata").date())) {
+                attendanceStatus = "holiday";
+            } else if (isWeekend(today)) {
+                attendanceStatus = "weekend";
             } else if (onLeave) {
                 attendanceStatus = "on_leave";
-            } else if (isHolidayToday) {
-                attendanceStatus = "holiday";
             } else if (shiftNotStartedYet) {
                 attendanceStatus = "not_started";
             } else {
@@ -2156,22 +2187,18 @@ const getTeamAttendance = async (req, res) => {
 
                 let dayStatus = "absent";
                 if (isFuture) dayStatus = "future";
-                else if (isHoliday) dayStatus = "holiday";
-                else if (weekend) dayStatus = "weekend";
-                else if (onLeave) { dayStatus = "on_leave"; leaveDays++; }
                 else if (rec) {
                     if (rec.isHalfDay) { dayStatus = "half_day"; halfDays++; presentDays++; }
                     else if (rec.isLate) { dayStatus = "late"; lateDays++; presentDays++; }
                     else if (rec.status === "present") { dayStatus = "present"; presentDays++; }
                     else { dayStatus = "absent"; absentDays++; }
-                } else {
-                    const isPastWorkingDay = !isFuture && !isHoliday && !weekend;
-                    if (isPastWorkingDay) {
-                        dayStatus = "absent";
-                        absentDays++;
-                    } else {
-                        dayStatus = "absent";
-                    }
+                }
+                else if (isHoliday) dayStatus = "holiday";
+                else if (weekend) dayStatus = "weekend";
+                else if (onLeave) { dayStatus = "on_leave"; leaveDays++; }
+                else {
+                    dayStatus = "absent";
+                    absentDays++;
                 }
 
                 days.push({ day: d, status: dayStatus, punchIn: rec?.punchIn, punchOut: rec?.punchOut });
@@ -2242,7 +2269,7 @@ const getHRAttendanceOverview = async (req, res) => {
 
         // Holidays
         const holidays = await Holiday.find({ date: { $gte: start, $lte: end } });
-        const holidayDates = new Set(holidays.map(h => new Date(h.date).getDate()));
+        const holidayDates = new Set(holidays.map(h => moment(h.date).tz("Asia/Kolkata").date()));
 
         // Leaves
         const leaves = await Leave.find({
@@ -2282,7 +2309,7 @@ const getHRAttendanceOverview = async (req, res) => {
         const todayRecordMap = {};
         todayRecords.forEach(r => { todayRecordMap[r.user._id.toString()] = r; });
 
-        const isHolidayToday = isWeekend(today) || holidayDates.has(today.getDate());
+        const isHolidayToday = isWeekend(today) || holidayDates.has(moment(today).tz("Asia/Kolkata").date());
 
         const todaySummary = allEmployees.map(emp => {
             const rec = todayRecordMap[emp._id.toString()];
@@ -2453,6 +2480,142 @@ const getHRAttendanceOverview = async (req, res) => {
     }
 };
 
+// ─────────────────────────────────────────────
+//  GET DAY-WISE ATTENDANCE (HR)
+//  GET /attendance/day-wise?date=2026-06-12&page=1&limit=20&search=...&department=...&status=...
+// ─────────────────────────────────────────────
+const getDayWiseAttendance = async (req, res) => {
+    try {
+        const { date, page = 1, limit = 50, search = "", department = "all", status = "all" } = req.query;
+
+        const targetMoment = date 
+            ? moment.tz(date, "YYYY-MM-DD", "Asia/Kolkata") 
+            : moment().tz("Asia/Kolkata");
+        
+        const dateString = targetMoment.format("YYYY-MM-DD");
+        const dayStart = targetMoment.clone().startOf("day").toDate();
+        const dayEnd = targetMoment.clone().endOf("day").toDate();
+
+        // 1. Get All Employees first (to compute absent/leave)
+        const employeeQuery = {
+            role: { $in: ["employee", "tl"] },
+            status: "active",
+        };
+
+        if (department !== "all") {
+            employeeQuery.department = department;
+        }
+
+        if (search) {
+            employeeQuery.$or = [
+                { name: { $regex: search, $options: "i" } },
+                { employeeId: { $regex: search, $options: "i" } },
+            ];
+        }
+
+        const allEmployees = await User.find(employeeQuery)
+            .select("name employeeId department designation shift joiningDate")
+            .lean();
+
+        const employeeIds = allEmployees.map(e => e._id);
+
+        // 2. Fetch Attendance, Leaves, Holidays
+        const [attendanceRecords, approvedLeaves, holiday] = await Promise.all([
+            Attendance.find({
+                user: { $in: employeeIds },
+                dateString: dateString
+            }).lean(),
+
+            Leave.find({
+                user: { $in: employeeIds },
+                status: "approved",
+                fromDate: { $lte: dayEnd },
+                toDate: { $gte: dayStart }
+            }).lean(),
+
+            Holiday.findOne({
+                date: { $gte: dayStart, $lte: dayEnd }
+            }).lean()
+        ]);
+
+        const attMap = {};
+        attendanceRecords.forEach(r => attMap[r.user.toString()] = r);
+
+        const leaveMap = {};
+        approvedLeaves.forEach(l => leaveMap[l.user.toString()] = l);
+
+        const isWeekendDay = isWeekend(dayStart);
+
+        // 3. Process each employee to determine status
+        let processedData = allEmployees.map(emp => {
+            const att = attMap[emp._id.toString()];
+            const leave = leaveMap[emp._id.toString()];
+            const isHolidayDay = !!holiday || isWeekendDay;
+
+            let currentStatus = "absent";
+            if (att) {
+                if (att.isHalfDay) currentStatus = "halfday";
+                else if (att.isLate) currentStatus = "late";
+                else currentStatus = "present";
+            } else if (leave) {
+                currentStatus = "leave";
+            } else if (isHolidayDay) {
+                currentStatus = "holiday";
+            }
+
+            return {
+                _id: emp._id,
+                name: emp.name,
+                employeeId: emp.employeeId,
+                department: emp.department,
+                designation: emp.designation,
+                punchIn: att?.punchIn || null,
+                punchOut: att?.punchOut || null,
+                workHours: att?.workHours || 0,
+                lateMinutes: att?.lateMinutes || 0,
+                status: currentStatus,
+                isLate: att?.isLate || false,
+                isHalfDay: att?.isHalfDay || false
+            };
+        });
+
+        // 4. Filter by status if requested
+        if (status !== "all") {
+            processedData = processedData.filter(d => d.status === status);
+        }
+
+        // 5. Compute Summary
+        const summary = {
+            present: processedData.filter(d => d.status === "present").length,
+            late: processedData.filter(d => d.status === "late").length,
+            halfday: processedData.filter(d => d.status === "halfday").length,
+            absent: processedData.filter(d => d.status === "absent").length,
+            leave: processedData.filter(d => d.status === "leave").length,
+            holiday: processedData.filter(d => d.status === "holiday").length,
+        };
+
+        // 6. Pagination
+        const total = processedData.length;
+        const startIndex = (Number(page) - 1) * Number(limit);
+        const paginatedData = processedData.slice(startIndex, startIndex + Number(limit));
+
+        res.json({
+            success: true,
+            date: dateString,
+            summary,
+            total,
+            page: Number(page),
+            limit: Number(limit),
+            totalPages: Math.ceil(total / Number(limit)),
+            data: paginatedData,
+            allData: status === "all" && department === "all" && !search ? null : undefined // for export if needed
+        });
+
+    } catch (error) {
+        console.error("getDayWiseAttendance Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 module.exports = {
     punchIn,
@@ -2462,4 +2625,5 @@ module.exports = {
     getWeeklyAttendanceSummary,
     getTeamAttendance,
     getHRAttendanceOverview,
+    getDayWiseAttendance,
 };

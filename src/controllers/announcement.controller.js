@@ -2,6 +2,7 @@ const Announcement = require("../models/announcement.model");
 const User = require("../models/user.model");
 const { createNotification } = require("./notification.controller");
 const { notifyAnnouncement } = require("../services/emailNotify");
+const moment = require("moment-timezone");
 
 // ─── CREATE (HR / Manager) ───────────────────────────────────────────────────
 const createAnnouncement = async (req, res) => {
@@ -27,57 +28,100 @@ const createAnnouncement = async (req, res) => {
 
         const populated = await Announcement.findById(announcement._id)
             .populate("createdBy", "name email role");
-
-        const io = req.app.get("io");
-
-        // ── Socket emit (your existing logic — kept as is) ──────────────────
-        if (targetUsers && targetUsers.length > 0) {
-            targetUsers.forEach((userId) => {
-                io.to(userId.toString()).emit("newAnnouncement", populated);
-            });
-        } else {
-            io.emit("newAnnouncement", populated);
-        }
-
-        // ── Notifications ────────────────────────────────────────────────────
-        const notifTitle = `📢 ${title}`;
-        const notifMessage = body?.slice(0, 100);
-        const meta = { announcementId: announcement._id };
-
-        if (targetUsers && targetUsers.length > 0) {
-            const users = await User.find({ _id: { $in: targetUsers } }).select("_id email").lean();
-            // Notify only the selected users
-            await Promise.allSettled(
-                users.map(u =>
-                    notifyAnnouncement(u.email, {
-                        title,
-                        body,
-                        postedBy: req.user.name
-                    })
-                )
-            );
-        } else {
-            // Notify all users matching the targetRole
-            const roleFilter = targetRole === "all"
-                ? {}
-                : { role: targetRole };
-
-            const users = await User.find(roleFilter).select("_id").lean();
-
-            await Promise.allSettled(
-                users
-                    .filter(u => u._id.toString() !== req.user._id.toString()) // don't notify yourself
-                    .map(u =>
-                        createNotification(io, u._id, notifTitle, notifMessage, "announcement", meta)
-                    )
-            );
-        }
-
         res.status(201).json({
             success: true,
             message: "Announcement created",
             announcement: populated,
         });
+
+        // Run notifications and emails AFTER response
+        setImmediate(async () => {
+            try {
+                const io = req.app.get("io");
+
+                const notifTitle = `📢 ${title}`;
+                const notifMessage = body?.slice(0, 100);
+                const meta = {
+                    announcementId: announcement._id,
+                };
+
+                // Get users
+                let query = {};
+                if (targetUsers?.length > 0) {
+                    query = { _id: { $in: targetUsers } };
+                } else if (targetRole === "all") {
+                    // Send only to employees and TLs
+                    query = { role: { $in: ["employee", "tl"] } };
+                } else {
+                    query = { role: targetRole };
+                }
+
+                const users = await User.find(query)
+                    .select("_id email role name")
+                    .lean();
+
+                const filteredUsers = users.filter(
+                    (u) =>
+                        u._id.toString() !== req.user._id.toString() &&
+                        !["hr", "manager", "superadmin"].includes(u.role)
+                );
+
+                // 1. Socket Updates (Real-time)
+                filteredUsers.forEach((u) => {
+                    io.to(`user_${u._id}`).emit("newAnnouncement", populated);
+                });
+
+                // 2. Persistent Notifications (DB + Socket)
+                await Promise.allSettled(
+                    filteredUsers.map((u) =>
+                        createNotification(
+                            io,
+                            u._id,
+                            notifTitle,
+                            notifMessage,
+                            "announcement",
+                            meta
+                        )
+                    )
+                );
+
+                // 3. Email Notifications (Sequential for SMTP safety)
+                for (const u of filteredUsers) {
+                    try {
+                        // Double check safeguard
+                        if (
+                            u._id.toString() === req.user._id.toString() ||
+                            ["hr", "manager", "superadmin"].includes(u.role)
+                        ) {
+                            continue;
+                        }
+
+                        await notifyAnnouncement(u.email, {
+                            title,
+                            body,
+                            postedBy: req.user?.name || "HR",
+                        });
+
+                        // Optional: Small delay to prevent SMTP burst for large lists
+                        if (filteredUsers.length > 50) {
+                            await new Promise(r => setTimeout(r, 100));
+                        }
+                    } catch (emailErr) {
+                        // Keep console.error for genuine failures
+                        console.error("Email error for:", u.email, emailErr.message);
+                    }
+                }
+
+            } catch (err) {
+                console.error(
+                    "Announcement background task failed:",
+                    err
+                );
+            }
+        });
+
+        return;
+
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -179,16 +223,25 @@ const getSingleAnnouncement = async (req, res) => {
             });
         }
 
+        // Only count actual announcement recipients: employee, tl
+        const allowedRoles = ["employee", "tl"];
         let allUsers = [];
 
         if (announcement.targetUsers && announcement.targetUsers.length > 0) {
             allUsers = await User.find(
-                { _id: { $in: announcement.targetUsers } },
+                {
+                    _id: { $in: announcement.targetUsers },
+                    role: { $in: allowedRoles }
+                },
                 "name role"
             );
         } else if (announcement.targetRole === "all") {
-            allUsers = await User.find({}, "name role");
-        } else {
+            // "all" should only include employee and tl for analytics
+            allUsers = await User.find(
+                { role: { $in: allowedRoles } },
+                "name role"
+            );
+        } else if (allowedRoles.includes(announcement.targetRole)) {
             allUsers = await User.find(
                 { role: announcement.targetRole },
                 "name role"
@@ -197,11 +250,15 @@ const getSingleAnnouncement = async (req, res) => {
 
         const uniqueReadMap = new Map();
         announcement.readBy.forEach((u) => {
-            uniqueReadMap.set(u._id.toString(), u);
+            // Exclude manager, hr, superadmin from seen list
+            if (u && allowedRoles.includes(u.role)) {
+                uniqueReadMap.set(u._id.toString(), u);
+            }
         });
+
         const uniqueRead = Array.from(uniqueReadMap.values());
         const readIds = uniqueRead.map(u => u._id.toString());
-        const creatorId = announcement.createdBy._id.toString();
+        const creatorId = announcement.createdBy?._id?.toString();
 
         const notRead = allUsers.filter(
             u =>
@@ -275,10 +332,6 @@ const updateAnnouncement = async (req, res) => {
         const populated = await Announcement.findById(announcement._id)
             .populate("createdBy", "name email role");
 
-        // Emit update event so frontend lists refresh in real-time
-        const io = req.app.get("io");
-        io.emit("updatedAnnouncement", populated);
-
         res.status(200).json({
             success: true,
             message: "Announcement updated",
@@ -300,10 +353,6 @@ const deleteAnnouncement = async (req, res) => {
                 message: "Announcement not found",
             });
         }
-
-        // Emit delete event so frontend removes it instantly
-        const io = req.app.get("io");
-        io.emit("deletedAnnouncement", req.params.id);
 
         res.status(200).json({ success: true, message: "Announcement deleted" });
     } catch (error) {

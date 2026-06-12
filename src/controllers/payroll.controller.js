@@ -5,12 +5,13 @@ const Holiday = require("../models/holiday.model");
 const Leave = require("../models/leave.model");
 const { createNotification } = require("./notification.controller");
 const { calculateSalary } = require("../utils/salary/salaryEngine");
+const moment = require("moment-timezone");
 
 // ─────────────────────────────────────────────
 //  HELPER
 // ─────────────────────────────────────────────
 const isWeekend = (date) => {
-    const d = new Date(date).getDay();
+    const d = moment(date).tz("Asia/Kolkata").day();
     return d === 0 || d === 6;
 };
 
@@ -106,8 +107,8 @@ const generatePayroll = async (req, res) => {
 
                 results.push(payroll);
 
-                const monthName = new Date(y, m - 1)
-                    .toLocaleString("default", { month: "long" });
+                const monthName = moment.tz({ year: y, month: m - 1 }, "Asia/Kolkata")
+                    .format("MMMM");
 
                 await createNotification(
                     io,
@@ -180,19 +181,19 @@ const markAsPaid = async (req, res) => {
         }
 
         payroll.status = "paid";
-        payroll.paidAt = new Date();
+        payroll.paidAt = moment().tz("Asia/Kolkata").toDate();
         payroll.paidBy = req.user._id;
         payroll.remarks = remarks || "";
 
         // Auto-release to employee when marked as paid
         payroll.isReleased = true;
-        payroll.releasedAt = new Date();
+        payroll.releasedAt = moment().tz("Asia/Kolkata").toDate();
         payroll.releasedBy = req.user._id;
 
         await payroll.save();
 
-        const monthName = new Date(payroll.year, payroll.month - 1)
-            .toLocaleString("default", { month: "long" });
+        const monthName = moment.tz({ year: payroll.year, month: payroll.month - 1 }, "Asia/Kolkata")
+            .format("MMMM");
 
         await createNotification(
             io,
@@ -225,20 +226,20 @@ const bulkMarkPaid = async (req, res) => {
         let count = 0;
         for (const p of payrolls) {
             p.status = "paid";
-            p.paidAt = new Date();
+            p.paidAt = moment().tz("Asia/Kolkata").toDate();
             p.paidBy = req.user._id;
             p.remarks = remarks || "";
 
             // Auto-release to employee when marked as paid
             p.isReleased = true;
-            p.releasedAt = new Date();
+            p.releasedAt = moment().tz("Asia/Kolkata").toDate();
             p.releasedBy = req.user._id;
 
             await p.save();
             count++;
 
-            const monthName = new Date(p.year, p.month - 1)
-                .toLocaleString("default", { month: "long" });
+            const monthName = moment.tz({ year: p.year, month: p.month - 1 }, "Asia/Kolkata")
+                .format("MMMM");
 
             await createNotification(
                 io,
@@ -377,7 +378,7 @@ const releasePayroll = async (req, res) => {
         }
 
         payroll.isReleased = true;
-        payroll.releasedAt = new Date();
+        payroll.releasedAt = moment().tz("Asia/Kolkata").toDate();
         payroll.releasedBy = req.user._id;
         await payroll.save();
 

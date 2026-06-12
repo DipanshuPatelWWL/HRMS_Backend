@@ -8,6 +8,8 @@ const {
 const { startLeaveAccrualCron, accrueMonthlyLeave, runYearlyReset, startShortLeaveResetCron } = require("./src/cron/leave.cron");
 // const { startPersonalIntentSeed } = require("./src/cron/seedCompanyKB")
 const { startShiftReminderCron } = require("./src/services/shiftReminder");
+const { checkPythonService } = require("./src/middleware/pythonProxy");
+const { startFollowUpCron } = require("./src/cron/followUp.cron");
 
 const PORT = process.env.PORT || 5000;
 
@@ -23,6 +25,8 @@ const startServer = async () => {
             startCelebrationCron();
             startShiftReminderCron();
             // startPersonalIntentSeed();
+            checkPythonService();
+            startFollowUpCron();
         });
     } catch (error) {
         console.error("❌ Server Error:", error.message);

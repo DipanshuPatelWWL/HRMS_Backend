@@ -1,7 +1,8 @@
 // controllers/holiday.controller.js
 const Holiday = require("../models/holiday.model");
 const { notifyHoliday } = require("../services/emailNotify");
-const User = require("../models/user.model")
+const User = require("../models/user.model");
+const moment = require("moment-timezone");
 
 // 📌 Utility: normalize date to start of day
 const normalizeDate = (date) => {
@@ -136,10 +137,10 @@ const getHolidays = async (req, res) => {
         let filter = {};
 
         if (month && year) {
-            const start = new Date(year, month - 1, 1);
-            const end = new Date(year, month, 0, 23, 59, 59);
+            const start = moment.tz(`${year}-${String(month).padStart(2, "0")}-01`, "Asia/Kolkata").startOf("month");
+            const end = start.clone().endOf("month");
 
-            filter.date = { $gte: start, $lte: end };
+            filter.date = { $gte: start.toDate(), $lte: end.toDate() };
         }
 
         const holidays = await Holiday.find(filter)

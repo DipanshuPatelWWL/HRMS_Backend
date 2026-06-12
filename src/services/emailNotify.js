@@ -7,7 +7,8 @@ const MONTHS = [
 
 const fmtDate = (d) =>
     new Date(d || Date.now()).toLocaleDateString("en-IN", {
-        day: "2-digit", month: "short", year: "numeric"
+        day: "2-digit", month: "short", year: "numeric",
+        timeZone: "Asia/Kolkata"
     });
 
 // Reusable HTML wrapper

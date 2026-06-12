@@ -132,6 +132,14 @@ const attendanceSchema = new mongoose.Schema(
             type: Date,
             default: null,
         },
+        shiftEndReminderSent: {
+            type: Boolean,
+            default: false,
+        },
+        shiftEndedNotificationSent: {
+            type: Boolean,
+            default: false,
+        },
     },
     {
         timestamps: true,

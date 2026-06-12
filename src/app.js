@@ -31,6 +31,10 @@ const AssetsRoutes = require("./routes/assetRoutes");
 const PolicyRoutes = require("./routes/policy.routes");
 const isProd = process.env.NODE_ENV === "production";
 
+//python advance sales
+const salesIntelligenceRoutes = require("./routes/salesIntelligence.routes");
+const followUpRoutes = require("./routes/followUp.routes");
+
 //tracker router ------------------------
 const activityMonitorRoutes = require("./routes/activityMonitor.routes");
 
@@ -66,6 +70,34 @@ app.use(cors({
 
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
+
+
+app.use((req, res, next) => {
+    const start = Date.now();
+
+    res.on("finish", () => {
+        const duration = Date.now() - start;
+
+        if (duration > 1000) {
+            console.log(
+                `🔴 VERY SLOW [${res.statusCode}] ${req.method} ${req.originalUrl} - ${duration}ms`
+            );
+        } else if (duration > 500) {
+            console.log(
+                `🟡 SLOW [${res.statusCode}] ${req.method} ${req.originalUrl} - ${duration}ms`
+            );
+        } else {
+            console.log(
+                `🟢 FAST [${res.statusCode}] ${req.method} ${req.originalUrl} - ${duration}ms`
+            );
+        }
+    });
+
+    next();
+});
+
+
+
 app.use((req, res, next) => {
     res.setHeader("Connection", "keep-alive");
     next();
@@ -196,4 +228,7 @@ app.use("/api/policies", PolicyRoutes);
 // -------------------------tracker route ------------------------------------
 app.use("/api/activity-monitor", activityMonitorRoutes);
 
+// -------------------------python advance sales route ------------------------------------
+app.use("/api/intelligence", salesIntelligenceRoutes);
+app.use("/api/intelligence/follow-ups", followUpRoutes);
 module.exports = { app, server };

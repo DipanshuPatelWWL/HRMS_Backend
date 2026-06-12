@@ -1,5 +1,6 @@
 const Celebration = require("../models/celebration.model");
 const User = require("../models/user.model");
+const moment = require("moment-timezone");
 
 
 // ─────────────────────────────────────────────
@@ -82,14 +83,8 @@ const createCelebration = async (req, res) => {
 
 const getUpcomingCelebrations = async (req, res) => {
     try {
-        const today = new Date();
-
-        // Normalize to midnight for accurate day diff
-        const todayMidnight = new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate()
-        );
+        const nowIST = moment().tz("Asia/Kolkata");
+        const todayMidnight = nowIST.clone().startOf("day");
 
         const users = await User.find({ status: "active" });
 
@@ -99,26 +94,16 @@ const getUpcomingCelebrations = async (req, res) => {
 
             // ── BIRTHDAY ──────────────────────────
             if (user.dob) {
-                const dob = new Date(user.dob);
+                const dob = moment.tz(user.dob, "Asia/Kolkata");
 
-                let nextBirthday = new Date(
-                    today.getFullYear(),
-                    dob.getMonth(),
-                    dob.getDate()
-                );
+                let nextBirthday = dob.clone().year(nowIST.year());
 
                 // Roll to next year if already passed
-                if (nextBirthday < todayMidnight) {
-                    nextBirthday = new Date(
-                        today.getFullYear() + 1,
-                        dob.getMonth(),
-                        dob.getDate()
-                    );
+                if (nextBirthday.isBefore(todayMidnight, "day")) {
+                    nextBirthday.year(nowIST.year() + 1);
                 }
 
-                const diffDays = Math.round(
-                    (nextBirthday - todayMidnight) / (1000 * 60 * 60 * 24)
-                );
+                const diffDays = nextBirthday.diff(todayMidnight, "days");
 
                 if (diffDays >= 0 && diffDays <= 30) {
                     events.push({
@@ -126,7 +111,7 @@ const getUpcomingCelebrations = async (req, res) => {
                         employeeName: user.name,
                         avatar: user.avatar || "",
                         eventType: "birthday",
-                        eventDate: nextBirthday,
+                        eventDate: nextBirthday.toDate(),
                         daysLeft: diffDays,
                     });
                 }
@@ -134,32 +119,22 @@ const getUpcomingCelebrations = async (req, res) => {
 
             // ── WORK ANNIVERSARY ──────────────────
             if (user.joiningDate) {
-                const joining = new Date(user.joiningDate);
+                const joining = moment.tz(user.joiningDate, "Asia/Kolkata");
 
                 // Only show if they've worked at least 1 year
-                const yearsWorked = today.getFullYear() - joining.getFullYear();
-                if (yearsWorked < 1) return;
-
-                let nextAnniversary = new Date(
-                    today.getFullYear(),
-                    joining.getMonth(),
-                    joining.getDate()
-                );
-
-                // Roll to next year if already passed
-                if (nextAnniversary < todayMidnight) {
-                    nextAnniversary = new Date(
-                        today.getFullYear() + 1,
-                        joining.getMonth(),
-                        joining.getDate()
-                    );
+                let yearsWorked = nowIST.year() - joining.year();
+                
+                // If anniversary hasn't happened yet this year, use previous year's anniversary to calculate yearsWorked
+                let nextAnniversary = joining.clone().year(nowIST.year());
+                
+                if (nextAnniversary.isBefore(todayMidnight, "day")) {
+                    nextAnniversary.year(nowIST.year() + 1);
                 }
+                
+                const finalYearsWorked = nextAnniversary.year() - joining.year();
+                if (finalYearsWorked < 1) return;
 
-                const diffDays = Math.round(
-                    (nextAnniversary - todayMidnight) / (1000 * 60 * 60 * 24)
-                );
-
-                const anniversaryYear = nextAnniversary.getFullYear() - joining.getFullYear();
+                const diffDays = nextAnniversary.diff(todayMidnight, "days");
 
                 if (diffDays >= 0 && diffDays <= 30) {
                     events.push({
@@ -167,9 +142,9 @@ const getUpcomingCelebrations = async (req, res) => {
                         employeeName: user.name,
                         avatar: user.avatar || "",
                         eventType: "anniversary",
-                        eventDate: nextAnniversary,
+                        eventDate: nextAnniversary.toDate(),
                         daysLeft: diffDays,
-                        anniversaryYear,
+                        anniversaryYear: finalYearsWorked,
                     });
                 }
             }
