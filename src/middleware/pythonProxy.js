@@ -2,12 +2,13 @@ const axios = require("axios");
 
 const PYTHON_URL = process.env.PYTHON_SERVICE_URL || "http://localhost:8000";
 const PYTHON_API_KEY = process.env.PYTHON_ENGINE_API_KEY || "dev-secret-key-12345";
+console.log(PYTHON_URL)
 
 // Reusable axios instance for all Python service calls
 const pythonClient = axios.create({
     baseURL: PYTHON_URL,
     timeout: 60000,
-    headers: { 
+    headers: {
         "Content-Type": "application/json",
         "X-API-KEY": PYTHON_API_KEY
     },
