@@ -3,14 +3,6 @@ const axios = require("axios");
 const PYTHON_URL = process.env.PYTHON_SERVICE_URL || "http://localhost:8000";
 const PYTHON_API_KEY = process.env.PYTHON_ENGINE_API_KEY || "dev-secret-key-12345";
 
-console.log("=== NODE AUTH DEBUG ===");
-console.log("PYTHON_URL =", PYTHON_URL);
-console.log("ENV KEY EXISTS =", !!process.env.PYTHON_ENGINE_API_KEY);
-console.log(
-    "API KEY PREFIX =",
-    PYTHON_API_KEY ? PYTHON_API_KEY.substring(0, 8) : "NONE"
-);
-
 // Reusable axios instance for all Python service calls
 const pythonClient = axios.create({
     baseURL: PYTHON_URL,

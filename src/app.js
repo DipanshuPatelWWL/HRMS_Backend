@@ -127,7 +127,6 @@ io.use((socket, next) => {
         const token = socket.handshake.auth?.token;
 
         if (!token) {
-            console.log("Socket rejected: No token");
             return next(new Error("Unauthorized: No token"));
         }
         const decoded = jwt.verify(token, process.env.JWT_SECRET);

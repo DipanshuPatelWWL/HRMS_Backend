@@ -44,6 +44,3 @@ uniqueFiles.forEach(file => {
         console.warn(`⚠️  Not found: ${file}`);
     }
 });
-
-console.log("\n🎉 Update files ready at /updates/");
-console.log("URL: https://hrmsback.digitalwebguider.com/updates/latest.yml");

@@ -157,6 +157,10 @@ exports.generateLeads = async (req, res) => {
                 { timeout: 90000 }
             );
             console.timeEnd("python_find_leads");
+            console.log("=================================");
+            console.log("PYTHON FULL RESPONSE");
+            console.log(JSON.stringify(response.data, null, 2));
+            console.log("=================================");
             pythonLeads = response.data?.leads || [];
             console.log(`✅ Python returned ${pythonLeads.length} leads. Success: ${response.data?.success}`);
         } catch (pyErr) {

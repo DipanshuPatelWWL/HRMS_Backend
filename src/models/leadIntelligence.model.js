@@ -162,21 +162,3 @@ leadIntelligenceSchema.methods.addTimeline = function (action, performedBy = "sy
 };
 
 module.exports = mongoose.model("LeadIntelligence", leadIntelligenceSchema);
-
-// ─────────────────────────────────────────────────────────────────────────────
-// NOTE: If you prefer to add intelligence fields directly to your existing
-// sales.report.model.js instead of a separate collection, open that file and
-// add these fields to the existing schema:
-//
-//   score:           { type: Number, default: 0 },
-//   tag:             { type: String, enum: ["hot","warm","cold","unscored"], default: "unscored" },
-//   website:         { type: String, default: "" },
-//   linkedin:        { type: String, default: "" },
-//   opportunities:   [opportunitySchema],
-//   emailDraft:      { subject, body, generatedAt, status },
-//   followUpDates:   [...],
-//   websiteAnalysis: { techStack, isMobileResponsive, ... },
-//   generatedBy:     { type: String, default: "manual" },
-//
-// Both approaches work. Separate model = cleaner; merged = simpler queries.
-// ─────────────────────────────────────────────────────────────────────────────
