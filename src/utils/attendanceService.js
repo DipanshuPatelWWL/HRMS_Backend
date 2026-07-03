@@ -31,8 +31,34 @@ const getAttendanceGrid = async (userId, startDate, endDate) => {
         User.findById(userId).select("joiningDate relievingDate createdAt shift").lean()
     ]);
 
-    const attMap = new Map(attendance.map(a => [moment(a.date).format("YYYY-MM-DD"), a]));
-    const holidayMap = new Map(holidays.map(h => [moment(h.date).format("YYYY-MM-DD"), h]));
+    const attMap = new Map(
+        attendance.map((a) => [
+            a.dateString || moment(a.date).tz("Asia/Kolkata").format("YYYY-MM-DD"),
+            a
+        ])
+    );
+
+    console.log("=================================");
+    console.log("Attendance Found :", attendance.length);
+
+    attendance.forEach((a) => {
+        console.log({
+            employee: a.user.toString(),
+            date: a.date,
+            dateString: a.dateString,
+            punchIn: a.punchIn,
+            status: a.status,
+        });
+    });
+
+    const holidayMap = new Map(
+        holidays.map((h) => [
+            moment(h.date)
+                .tz("Asia/Kolkata")
+                .format("YYYY-MM-DD"),
+            h,
+        ])
+    );
 
     // Process leaves into a daily map
     const leaveMap = new Map();
