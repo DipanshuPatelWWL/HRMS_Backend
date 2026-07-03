@@ -15,13 +15,22 @@ const getAttendanceGrid = async (userId, startDate, endDate) => {
     const today = moment().tz("Asia/Kolkata").startOf("day");
 
     const [attendance, holidays, leaves, user] = await Promise.all([
-        Attendance.find({
-            user: userId,
-            date: { $gte: start.toDate(), $lte: end.toDate() }
-        }).lean(),
-        Holiday.find({
-            date: { $gte: start.toDate(), $lte: end.toDate() }
-        }).lean(),
+        // Attendance.find({
+        //     user: userId,
+        //     date: { $gte: start.toDate(), $lte: end.toDate() }
+        // }).lean(),
+        const attendance = await Attendance.find({
+        user: userId
+    }).lean();
+
+    console.log("ALL Attendance:", attendance.length);
+
+    attendance.forEach(a => {
+        console.log(a.dateString);
+    });
+    Holiday.find({
+        date: { $gte: start.toDate(), $lte: end.toDate() }
+    }).lean(),
         Leave.find({
             user: userId,
             status: "approved",
@@ -31,126 +40,126 @@ const getAttendanceGrid = async (userId, startDate, endDate) => {
         User.findById(userId).select("joiningDate relievingDate createdAt shift").lean()
     ]);
 
-    console.log("================================");
-    console.log("Attendance Records:", attendance.length);
+console.log("================================");
+console.log("Attendance Records:", attendance.length);
 
-    attendance.forEach((a) => {
-        console.log(
-            a.dateString +
-            " | status=" + a.status +
-            " | PI=" + !!a.punchIn +
-            " | PO=" + !!a.punchOut +
-            " | WH=" + a.workHours
-        );
-    });
-
-    console.log("Creating Attendance Map...");
-
-    const attMap = new Map(
-        attendance.map((a) => [
-            a.dateString || moment(a.date).tz("Asia/Kolkata").format("YYYY-MM-DD"),
-            a
-        ])
+attendance.forEach((a) => {
+    console.log(
+        a.dateString +
+        " | status=" + a.status +
+        " | PI=" + !!a.punchIn +
+        " | PO=" + !!a.punchOut +
+        " | WH=" + a.workHours
     );
+});
 
-    const holidayMap = new Map(
-        holidays.map((h) => [
-            moment(h.date)
-                .tz("Asia/Kolkata")
-                .format("YYYY-MM-DD"),
-            h,
-        ])
-    );
+console.log("Creating Attendance Map...");
 
-    // Process leaves into a daily map
-    const leaveMap = new Map();
-    leaves.forEach(l => {
-        let curr = moment(l.fromDate).tz("Asia/Kolkata").startOf("day");
-        const lEnd = moment(l.toDate).tz("Asia/Kolkata").startOf("day");
-        while (curr.isSameOrBefore(lEnd)) {
-            leaveMap.set(curr.format("YYYY-MM-DD"), l);
-            curr.add(1, "day");
-        }
-    });
+const attMap = new Map(
+    attendance.map((a) => [
+        a.dateString || moment(a.date).tz("Asia/Kolkata").format("YYYY-MM-DD"),
+        a
+    ])
+);
 
-    const grid = [];
-    let curr = start.clone();
+const holidayMap = new Map(
+    holidays.map((h) => [
+        moment(h.date)
+            .tz("Asia/Kolkata")
+            .format("YYYY-MM-DD"),
+        h,
+    ])
+);
 
-    // Effective dates
-    const joiningDate = user?.joiningDate || user?.createdAt;
-    const relievingDate = user?.relievingDate;
-    const joiningMoment = joiningDate ? moment(joiningDate).tz("Asia/Kolkata").startOf("day") : null;
-    const relievingMoment = relievingDate ? moment(relievingDate).tz("Asia/Kolkata").endOf("day") : null;
-
-    while (curr.isSameOrBefore(end)) {
-        const dateStr = curr.format("YYYY-MM-DD");
-        const att = attMap.get(dateStr);
-        const holiday = holidayMap.get(dateStr);
-        const leave = leaveMap.get(dateStr);
-        const isWeekend = curr.day() === 0 || curr.day() === 6;
-        const isFuture = curr.isAfter(today);
-
-        const isJoined = joiningMoment ? curr.isSameOrAfter(joiningMoment) : true;
-        const isRelieved = relievingMoment ? curr.isAfter(relievingMoment) : false;
-
-        let status = "absent";
-        let displayStatus = "Absent";
-
-        if (!isJoined) {
-            status = "not_joined";
-            displayStatus = "Not Joined";
-        } else if (isRelieved) {
-            status = "inactive";
-            displayStatus = "Inactive";
-        } else if (leave) {
-            status = "leave";
-            displayStatus = "Leave";
-        } else if (holiday) {
-            status = "holiday";
-            displayStatus = "Holiday";
-        } else if (isWeekend) {
-            status = "weekend";
-            displayStatus = "Weekend";
-        } else if (att) {
-            status = att.status || "present";
-            displayStatus = status.charAt(0).toUpperCase() + status.slice(1).replace("-", " ");
-            if (att.isHalfDay) displayStatus = "Half Day";
-            if (att.isLate && !att.isHalfDay) displayStatus = "Late";
-        } else if (isFuture) {
-            status = "future";
-            displayStatus = "Future";
-        } else {
-            status = "absent";
-            displayStatus = "Absent";
-        }
-
-        grid.push({
-            date: curr.toDate(),
-            dateString: dateStr,
-            status,
-            displayStatus,
-            punchIn: att?.punchIn || null,
-            punchOut: att?.punchOut || null,
-            workHours: att?.workHours || 0,
-            isLate: att?.isLate || false,
-            lateMinutes: att?.lateMinutes || 0,
-            isHalfDay: att?.isHalfDay || false,
-            isShortLeave: att?.isShortLeave || false,
-            eightHourPassUsed: att?.eightHourPassUsed || false,
-            mpoFlag: att?.mpoFlag || false,
-            mpoResolved: att?.mpoResolved || false,
-            mpoDetectedAt: att?.mpoDetectedAt || null,
-            halfDayReason: att?.halfDayReason || "",
-            holidayName: holiday?.name,
-            leaveType: leave?.leaveType
-        });
-
+// Process leaves into a daily map
+const leaveMap = new Map();
+leaves.forEach(l => {
+    let curr = moment(l.fromDate).tz("Asia/Kolkata").startOf("day");
+    const lEnd = moment(l.toDate).tz("Asia/Kolkata").startOf("day");
+    while (curr.isSameOrBefore(lEnd)) {
+        leaveMap.set(curr.format("YYYY-MM-DD"), l);
         curr.add(1, "day");
     }
+});
 
-    grid._shift = user?.shift;
-    console.log("Grid Days:", grid.length);
-    return grid;
+const grid = [];
+let curr = start.clone();
+
+// Effective dates
+const joiningDate = user?.joiningDate || user?.createdAt;
+const relievingDate = user?.relievingDate;
+const joiningMoment = joiningDate ? moment(joiningDate).tz("Asia/Kolkata").startOf("day") : null;
+const relievingMoment = relievingDate ? moment(relievingDate).tz("Asia/Kolkata").endOf("day") : null;
+
+while (curr.isSameOrBefore(end)) {
+    const dateStr = curr.format("YYYY-MM-DD");
+    const att = attMap.get(dateStr);
+    const holiday = holidayMap.get(dateStr);
+    const leave = leaveMap.get(dateStr);
+    const isWeekend = curr.day() === 0 || curr.day() === 6;
+    const isFuture = curr.isAfter(today);
+
+    const isJoined = joiningMoment ? curr.isSameOrAfter(joiningMoment) : true;
+    const isRelieved = relievingMoment ? curr.isAfter(relievingMoment) : false;
+
+    let status = "absent";
+    let displayStatus = "Absent";
+
+    if (!isJoined) {
+        status = "not_joined";
+        displayStatus = "Not Joined";
+    } else if (isRelieved) {
+        status = "inactive";
+        displayStatus = "Inactive";
+    } else if (leave) {
+        status = "leave";
+        displayStatus = "Leave";
+    } else if (holiday) {
+        status = "holiday";
+        displayStatus = "Holiday";
+    } else if (isWeekend) {
+        status = "weekend";
+        displayStatus = "Weekend";
+    } else if (att) {
+        status = att.status || "present";
+        displayStatus = status.charAt(0).toUpperCase() + status.slice(1).replace("-", " ");
+        if (att.isHalfDay) displayStatus = "Half Day";
+        if (att.isLate && !att.isHalfDay) displayStatus = "Late";
+    } else if (isFuture) {
+        status = "future";
+        displayStatus = "Future";
+    } else {
+        status = "absent";
+        displayStatus = "Absent";
+    }
+
+    grid.push({
+        date: curr.toDate(),
+        dateString: dateStr,
+        status,
+        displayStatus,
+        punchIn: att?.punchIn || null,
+        punchOut: att?.punchOut || null,
+        workHours: att?.workHours || 0,
+        isLate: att?.isLate || false,
+        lateMinutes: att?.lateMinutes || 0,
+        isHalfDay: att?.isHalfDay || false,
+        isShortLeave: att?.isShortLeave || false,
+        eightHourPassUsed: att?.eightHourPassUsed || false,
+        mpoFlag: att?.mpoFlag || false,
+        mpoResolved: att?.mpoResolved || false,
+        mpoDetectedAt: att?.mpoDetectedAt || null,
+        halfDayReason: att?.halfDayReason || "",
+        holidayName: holiday?.name,
+        leaveType: leave?.leaveType
+    });
+
+    curr.add(1, "day");
+}
+
+grid._shift = user?.shift;
+console.log("Grid Days:", grid.length);
+return grid;
 };
 
 /**
