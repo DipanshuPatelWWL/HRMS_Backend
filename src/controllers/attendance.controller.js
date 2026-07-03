@@ -473,46 +473,13 @@ const getMonthlyAttendance = async (req, res) => {
         const startOfMonth = startMoment.clone().startOf("month");
         const endOfMonth = startMoment.clone().endOf("month");
 
-        console.log(
-            "Controller Start:",
-            startOfMonth.format("YYYY-MM-DD HH:mm:ss Z")
-        );
-        console.log(
-            "Controller End:",
-            endOfMonth.format("YYYY-MM-DD HH:mm:ss Z")
-        );
-
         const data = await attendanceService.getAttendanceGrid(
             userId,
             startOfMonth.toDate(),
             endOfMonth.toDate()
         );
 
-        console.log("========== MONTHLY ==========");
-        console.log("User ID : " + userId);
-        console.log("Month   : " + m);
-        console.log("Year    : " + y);
-        console.log("Grid    : " + data.length);
-
-        for (const day of data) {
-            console.log(
-                day.dateString +
-                " | " +
-                day.status +
-                " | PI=" + (day.punchIn ? "YES" : "NO") +
-                " | PO=" + (day.punchOut ? "YES" : "NO") +
-                " | WH=" + day.workHours
-            );
-        }
-
         const summary = attendanceService.calculateStats(data);
-
-        console.log("Present : " + summary.present);
-        console.log("Late    : " + summary.late);
-        console.log("HalfDay : " + summary.halfDay);
-        console.log("Absent  : " + summary.absent);
-        console.log("Working : " + summary.workingDays);
-        console.log("AvgHour : " + summary.avgDailyHours);
 
         res.status(200).json({
             success: true,

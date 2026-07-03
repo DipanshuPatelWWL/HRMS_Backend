@@ -14,18 +14,12 @@ const getAttendanceGrid = async (userId, startDate, endDate) => {
     const end = moment(endDate).tz("Asia/Kolkata").endOf("day");
     const today = moment().tz("Asia/Kolkata").startOf("day");
 
-    console.log("================================");
-    console.log("Start Date :", start.format());
-    console.log("End Date   :", end.format());
-    console.log("Diff Days  :", end.diff(start, "days"));
-
     const [attendance, holidays, leaves, user] = await Promise.all([
         Attendance.find({
             user: userId,
-        }).lean(),
-        Holiday.find({
             date: { $gte: start.toDate(), $lte: end.toDate() }
         }).lean(),
+        Holiday.find({ date: { $gte: start.toDate(), $lte: end.toDate() } }).lean(),
         Leave.find({
             user: userId,
             status: "approved",
@@ -34,21 +28,6 @@ const getAttendanceGrid = async (userId, startDate, endDate) => {
         }).lean(),
         User.findById(userId).select("joiningDate relievingDate createdAt shift").lean()
     ]);
-
-    console.log("================================");
-    console.log("Attendance Records:", attendance.length);
-
-    attendance.forEach((a) => {
-        console.log(
-            a.dateString +
-            " | status=" + a.status +
-            " | PI=" + !!a.punchIn +
-            " | PO=" + !!a.punchOut +
-            " | WH=" + a.workHours
-        );
-    });
-
-    console.log("Creating Attendance Map...");
 
     const attMap = new Map(
         attendance.map((a) => [
@@ -86,11 +65,7 @@ const getAttendanceGrid = async (userId, startDate, endDate) => {
     const joiningMoment = joiningDate ? moment(joiningDate).tz("Asia/Kolkata").startOf("day") : null;
     const relievingMoment = relievingDate ? moment(relievingDate).tz("Asia/Kolkata").endOf("day") : null;
 
-    console.log("Loop Starts");
-
     while (curr.isSameOrBefore(end)) {
-
-        console.log("Current:", curr.format("YYYY-MM-DD"));
         const dateStr = curr.format("YYYY-MM-DD");
         const att = attMap.get(dateStr);
         const holiday = holidayMap.get(dateStr);
@@ -157,9 +132,6 @@ const getAttendanceGrid = async (userId, startDate, endDate) => {
     }
 
     grid._shift = user?.shift;
-    console.log("Grid Days:", grid.length);
-    console.log("Loop Finished");
-    console.log("Grid Length:", grid.length);
     return grid;
 };
 
@@ -167,7 +139,6 @@ const getAttendanceGrid = async (userId, startDate, endDate) => {
  * Calculates summary stats from an attendance grid.
  */
 const calculateStats = (grid) => {
-    console.log("========== CALCULATE STATS ==========");
     const stats = {
         present: 0,
         late: 0,
@@ -190,35 +161,30 @@ const calculateStats = (grid) => {
     stats.totalWorkHours = 0;
 
     grid.forEach(day => {
-        console.log(
-            day.dateString +
-            " | status=" + day.status +
-            " | PI=" + !!day.punchIn +
-            " | PO=" + !!day.punchOut +
-            " | WH=" + day.workHours
-        );
         // Only count stats for past and today
         if (day.dateString > todayStr) return;
         if (day.status === "not_joined" || day.status === "inactive") return;
 
         const isPresentType = ["present", "late", "half-day", "short-leave"].includes(day.status);
+        const isCompleted = !!(day.punchIn && day.punchOut);
+        const isToday = day.dateString === todayStr;
 
-        // Rule: A day is counted only if both punchIn and punchOut exist
-        // Exclude: Leave, Absent, Holiday, Weekend (handled by isPresentType check)
-        // Exclude: Future (handled by todayStr check)
-        // Exclude: Active Shift / Missing Punch Out (handled by punchOut check)
-        if (isPresentType && day.punchIn && day.punchOut) {
+        if (isPresentType && isCompleted) {
+            // Fully completed day — counts toward Present/Late/HalfDay AND hours
             completedPresentDays++;
             stats.totalWorkHours += day.workHours || 0;
-        }
-
-        if (isPresentType) {
             stats.workedDays++;
             stats.totalLateMinutes += day.lateMinutes || 0;
-
             if (day.isHalfDay) stats.halfDay++;
             else if (day.isLate) stats.late++;
             else stats.present++;
+        } else if (isPresentType && day.punchIn && !day.punchOut && isToday) {
+            // Still punched in today — don't count as a "Full Day" yet
+            stats.inProgress = (stats.inProgress || 0) + 1;
+        } else if (isPresentType && day.punchIn && !day.punchOut && !isToday) {
+            // Past day, punched in but never punched out / never resolved — treat as half day
+            stats.halfDay++;
+            stats.workedDays++;
         } else if (day.status === "missing_punch_out" && day.mpoResolved !== true) {
             stats.halfDay++;
         } else if (day.status === "absent") {
@@ -256,17 +222,6 @@ const calculateStats = (grid) => {
     stats.compliancePercentage = stats.expectedShiftHours > 0
         ? parseFloat(((stats.avgDailyHours / stats.expectedShiftHours) * 100).toFixed(2))
         : 0;
-
-
-    console.log("========== FINAL STATS ==========");
-    console.log("Present:", stats.present);
-    console.log("Late:", stats.late);
-    console.log("HalfDay:", stats.halfDay);
-    console.log("Absent:", stats.absent);
-    console.log("Working Days:", stats.workingDays);
-    console.log("Completed Present Days:", stats.completedPresentDays);
-    console.log("Total Hours:", stats.totalWorkHours);
-    console.log("Average Hours:", stats.avgDailyHours);
 
     return stats;
 };
