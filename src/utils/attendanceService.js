@@ -31,6 +31,17 @@ const getAttendanceGrid = async (userId, startDate, endDate) => {
         User.findById(userId).select("joiningDate relievingDate createdAt shift").lean()
     ]);
 
+
+    console.log("Attendance Count:", attendance.length);
+
+    attendance.forEach(a => {
+        console.log({
+            date: a.dateString,
+            status: a.status,
+            workHours: a.workHours
+        });
+    });
+
     const attMap = new Map(
         attendance.map((a) => [
             a.dateString || moment(a.date).tz("Asia/Kolkata").format("YYYY-MM-DD"),

@@ -426,6 +426,7 @@ const punchOut = async (req, res) => {
 //  GET TODAY'S ATTENDANCE
 // ─────────────────────────────────────────────
 const getTodayAttendance = async (req, res) => {
+    console.log("today", req)
     try {
         const todayString = moment().tz("Asia/Kolkata").format("YYYY-MM-DD");
         const attendance = await Attendance.findOne({
@@ -450,6 +451,7 @@ const getTodayAttendance = async (req, res) => {
 //  GET MONTHLY ATTENDANCE
 // ─────────────────────────────────────────────
 const getMonthlyAttendance = async (req, res) => {
+    console.log("MonthlyAttendance", req)
     try {
         const { month, year, userId: targetId } = req.query;
         const isAdmin = ["hr", "manager", "superadmin"].includes(req.user.role);
@@ -464,6 +466,15 @@ const getMonthlyAttendance = async (req, res) => {
         const startOfMonth = moment.tz(`${y}-${String(m).padStart(2, "0")}-01`, "Asia/Kolkata").startOf("month").toDate();
         const endOfMonth = moment(startOfMonth).endOf("month").toDate();
 
+        console.log("========== MONTHLY ==========");
+        console.log({
+            userId,
+            month: m,
+            year: y,
+            startOfMonth,
+            endOfMonth,
+        });
+
         const data = await attendanceService.getAttendanceGrid(userId, startOfMonth, endOfMonth);
         const summary = attendanceService.calculateStats(data);
 
@@ -477,6 +488,7 @@ const getMonthlyAttendance = async (req, res) => {
 //  GET WEEKLY ATTENDANCE SUMMARY
 // ─────────────────────────────────────────────
 const getWeeklyAttendanceSummary = async (req, res) => {
+    console.log("WeeklyAttendanceSummary", req)
     try {
         const start = moment().tz("Asia/Kolkata").subtract(7, "days").startOf("day").toDate();
 
@@ -497,6 +509,7 @@ const getWeeklyAttendanceSummary = async (req, res) => {
 //  GET TEAM ATTENDANCE (TL)
 // ─────────────────────────────────────────────
 const getTeamAttendance = async (req, res) => {
+    console.log("TeamAttendance", req)
     try {
         const { month, year, date } = req.query;
         const nowIST = moment().tz("Asia/Kolkata");
@@ -698,6 +711,11 @@ const getDayWiseAttendance = async (req, res) => {
                 );
 
                 const day = grid?.[0] || {};
+
+                console.log("================================");
+                console.log("Employee:", u.name);
+                console.log("Grid[0]:", day);
+                console.log("================================");
 
                 let normalizedStatus = day.status || "absent";
 
