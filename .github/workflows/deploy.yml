@@ -19,4 +19,10 @@ jobs:
           port: 65002
           script: |
             cd /home/u787208577/domains/hrmsback.digitalwebguider.com/nodejs
-            git pull origin main
+
+            git fetch origin
+            git reset --hard origin/main
+
+            touch tmp/restart.txt
+
+            echo "Backend deployed successfully."
