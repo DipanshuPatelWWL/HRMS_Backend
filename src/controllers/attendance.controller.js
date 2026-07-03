@@ -463,7 +463,23 @@ const getMonthlyAttendance = async (req, res) => {
         const y = parseInt(year);
         const startOfMonth = moment.tz(`${y}-${String(m).padStart(2, "0")}-01`, "Asia/Kolkata").startOf("month").toDate();
         const endOfMonth = moment(startOfMonth).endOf("month").toDate();
-        const data = await attendanceService.getAttendanceGrid(userId, startOfMonth, endOfMonth);
+        console.log("========== CONTROLLER ==========");
+        console.log("StartOfMonth:", startOfMonth);
+        console.log("EndOfMonth  :", endOfMonth);
+        console.log(
+            "Start ISO   :",
+            moment(startOfMonth).format("YYYY-MM-DD HH:mm:ss")
+        );
+        console.log(
+            "End ISO     :",
+            moment(endOfMonth).format("YYYY-MM-DD HH:mm:ss")
+        );
+
+        const data = await attendanceService.getAttendanceGrid(
+            userId,
+            startOfMonth,
+            endOfMonth
+        );
 
         console.log("========== MONTHLY ==========");
         console.log("User ID : " + userId);
@@ -535,8 +551,24 @@ const getTeamAttendance = async (req, res) => {
 
         const m = parseInt(month) || (nowIST.month() + 1);
         const y = parseInt(year) || nowIST.year();
-        const startOfMonth = moment.tz(`${y}-${String(m).padStart(2, "0")}-01`, "Asia/Kolkata").startOf("month");
-        const endOfMonth = moment(startOfMonth).endOf("month");
+        const startOfMonth = moment
+            .tz(
+                {
+                    year: y,
+                    month: m - 1,
+                    day: 1,
+                },
+                "Asia/Kolkata"
+            )
+            .startOf("month");
+
+        const endOfMonth = startOfMonth.clone().endOf("month");
+
+        const data = await attendanceService.getAttendanceGrid(
+            userId,
+            startOfMonth.toDate(),
+            endOfMonth.toDate()
+        );
 
         const teamMembers = await User.find({
             reportingTo: req.user._id,
