@@ -14,6 +14,11 @@ const getAttendanceGrid = async (userId, startDate, endDate) => {
     const end = moment(endDate).tz("Asia/Kolkata").endOf("day");
     const today = moment().tz("Asia/Kolkata").startOf("day");
 
+    console.log("================================");
+    console.log("Start Date :", start.format());
+    console.log("End Date   :", end.format());
+    console.log("Diff Days  :", end.diff(start, "days"));
+
     const [attendance, holidays, leaves, user] = await Promise.all([
         Attendance.find({
             user: userId,
@@ -81,7 +86,11 @@ const getAttendanceGrid = async (userId, startDate, endDate) => {
     const joiningMoment = joiningDate ? moment(joiningDate).tz("Asia/Kolkata").startOf("day") : null;
     const relievingMoment = relievingDate ? moment(relievingDate).tz("Asia/Kolkata").endOf("day") : null;
 
+    console.log("Loop Starts");
+
     while (curr.isSameOrBefore(end)) {
+
+        console.log("Current:", curr.format("YYYY-MM-DD"));
         const dateStr = curr.format("YYYY-MM-DD");
         const att = attMap.get(dateStr);
         const holiday = holidayMap.get(dateStr);
@@ -149,6 +158,8 @@ const getAttendanceGrid = async (userId, startDate, endDate) => {
 
     grid._shift = user?.shift;
     console.log("Grid Days:", grid.length);
+    console.log("Loop Finished");
+    console.log("Grid Length:", grid.length);
     return grid;
 };
 
