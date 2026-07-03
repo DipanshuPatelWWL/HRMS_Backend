@@ -461,24 +461,31 @@ const getMonthlyAttendance = async (req, res) => {
 
         const m = parseInt(month);
         const y = parseInt(year);
-        const startOfMonth = moment.tz(`${y}-${String(m).padStart(2, "0")}-01`, "Asia/Kolkata").startOf("month").toDate();
-        const endOfMonth = moment(startOfMonth).endOf("month").toDate();
-        console.log("========== CONTROLLER ==========");
-        console.log("StartOfMonth:", startOfMonth);
-        console.log("EndOfMonth  :", endOfMonth);
+        const startMoment = moment.tz(
+            {
+                year: y,
+                month: m - 1,
+                day: 1,
+            },
+            "Asia/Kolkata"
+        );
+
+        const startOfMonth = startMoment.clone().startOf("month");
+        const endOfMonth = startMoment.clone().endOf("month");
+
         console.log(
-            "Start ISO   :",
-            moment(startOfMonth).format("YYYY-MM-DD HH:mm:ss")
+            "Controller Start:",
+            startOfMonth.format("YYYY-MM-DD HH:mm:ss Z")
         );
         console.log(
-            "End ISO     :",
-            moment(endOfMonth).format("YYYY-MM-DD HH:mm:ss")
+            "Controller End:",
+            endOfMonth.format("YYYY-MM-DD HH:mm:ss Z")
         );
 
         const data = await attendanceService.getAttendanceGrid(
             userId,
-            startOfMonth,
-            endOfMonth
+            startOfMonth.toDate(),
+            endOfMonth.toDate()
         );
 
         console.log("========== MONTHLY ==========");
