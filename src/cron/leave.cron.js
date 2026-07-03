@@ -150,9 +150,9 @@ const resetMonthlyShortLeave = async () => {
                 },
             }
         );
-        console.log(`✅ Short leave reset: ${result.modifiedCount} employees refreshed for ${nowMonth}/${nowYear}`);
+        console.log(`Short leave reset: ${result.modifiedCount} employees refreshed for ${nowMonth}/${nowYear}`);
     } catch (err) {
-        console.error("❌ Short leave reset cron error:", err.message);
+        console.error("Short leave reset cron error:", err.message);
     }
 };
 

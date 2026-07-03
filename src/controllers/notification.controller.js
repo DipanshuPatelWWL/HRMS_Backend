@@ -43,7 +43,7 @@ const createNotification = async (
         meta,
     });
 
-    /* 2. Emit via Socket.IO */
+    /* 3. Emit via Socket.IO */
     if (io) {
         const payload = {
             _id: notification._id,
@@ -57,12 +57,6 @@ const createNotification = async (
 
         /* Every user is in the room "user:<their_id>" — see server.js setup */
         io.to(`user_${userId}`).emit("newNotification", payload);
-
-        /* Also emit the specific event e.g. "leaveApproved" */
-        const specificEvent = TYPE_TO_EVENT[type];
-        if (specificEvent) {
-            io.to(`user_${userId}`).emit(specificEvent, payload);
-        }
     }
 
     return notification;

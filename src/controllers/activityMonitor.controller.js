@@ -646,12 +646,6 @@ const requestCapture = async (req, res) => {
 
         const io = req.app.get("io");
         if (io) {
-            // Log all sockets and their rooms for debugging
-            const sockets = await io.fetchSockets();
-            sockets.forEach(s => {
-                console.log(" -", s.id, "rooms:", [...s.rooms]);
-            });
-
             // Emit to both room formats to ensure agent receives it
             io.to(`user_${userId}`).emit("capture:request", {
                 captureId: capture._id.toString(),

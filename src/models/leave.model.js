@@ -22,6 +22,16 @@ const leaveSchema = new mongoose.Schema(
         fromDate: { type: Date, required: true },
         toDate: { type: Date, required: true },
         totalDays: { type: Number, required: true },
+        duration: {
+            type: String,
+            enum: ["full-day", "half-day"],
+            default: "full-day",
+        },
+        halfDaySession: {
+            type: String,
+            enum: ["first-half", "second-half"],
+            default: null,
+        },
 
         reason: { type: String, required: true, trim: true },
         attachment: { type: String, default: "" },
@@ -45,9 +55,12 @@ const leaveSchema = new mongoose.Schema(
         paidDays: { type: Number, default: 0 },
         unpaidDays: { type: Number, default: 0 },
 
+        // Store overwritten attendance records for restoration
+        overwrittenAttendances: { type: Array, default: [] },
+
         status: {
             type: String,
-            enum: ["pending", "approved", "rejected"],
+            enum: ["pending", "approved", "rejected", "cancelled", "revoked"],
             default: "pending",
         },
 

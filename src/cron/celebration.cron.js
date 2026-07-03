@@ -168,7 +168,7 @@ const processCelebrations = async () => {
 // ─────────────────────────────────────────────
 
 const startCelebrationCron = () => {
-    console.log("🚀 Celebration cron started");
+    console.log("Celebration cron started");
     cron.schedule("* * * * *", async () => {
         console.log("[CelebrationCron] checking...");
         await processCelebrations();

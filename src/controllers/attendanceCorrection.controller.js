@@ -35,6 +35,7 @@ const applyCorrection = async (correction, hrUserId) => {
     // Snapshot originals BEFORE touching anything
     correction.originalPunchIn = attendance?.punchIn || null;
     correction.originalPunchOut = attendance?.punchOut || null;
+    correction.oldStatus = attendance?.status || "absent";
 
     if (!attendance) {
         attendance = new Attendance({
@@ -48,66 +49,46 @@ const applyCorrection = async (correction, hrUserId) => {
     // ── Patch ONLY the field(s) the employee requested ──────────────────────
     // Never touch the other field — if it already has a value, keep it;
     // if it's empty, leave it empty. No auto-fill whatsoever.
-    if ((correction.type === "punch_in" || correction.type === "both") && correction.requestedPunchIn) {
+    if ((correction.type === "punch_in" || correction.type === "both" || correction.type === "MPO") && correction.requestedPunchIn) {
         attendance.punchIn = correction.requestedPunchIn;
     }
 
-    if ((correction.type === "punch_out" || correction.type === "both") && correction.requestedPunchOut) {
+    if ((correction.type === "punch_out" || correction.type === "both" || correction.type === "MPO") && correction.requestedPunchOut) {
         attendance.punchOut = correction.requestedPunchOut;
     }
 
-    // ── Recalculate workHours only when BOTH sides are genuinely present ─────
-    if (attendance.punchIn && attendance.punchOut) {
-        attendance.workHours = recalcWorkHours(attendance.punchIn, attendance.punchOut);
-    } else {
-        // One side is still missing — zero out so dashboard isn't misleading
-        attendance.workHours = 0;
-    }
-
-    // ── Recalculate late / half-day only when punchIn is known ──────────────
+    // ── Evaluate Unified Attendance ─────────────────────────────────────────
     if (attendance.punchIn) {
-        const punchInIST = moment(attendance.punchIn).tz("Asia/Kolkata");
-        const totalMinutes = punchInIST.hour() * 60 + punchInIST.minute();
-
-        const monthStart = punchInIST.clone().startOf("month").toDate();
-        const monthEnd = punchInIST.clone().endOf("month").toDate();
-
-        const lateCount = await Attendance.countDocuments({
-            user: correction.user,
-            date: { $gte: monthStart, $lte: monthEnd },
-            isLate: true,
-            _id: { $ne: attendance._id },
+        const { evaluateAttendance, updateShortLeaveBalance } = require("../utils/attendanceEvaluation");
+        const evalResult = await evaluateAttendance({
+            userId: correction.user,
+            attendanceId: attendance._id,
+            punchIn: attendance.punchIn,
+            punchOut: attendance.punchOut
         });
 
-        let isLate = false;
-        let isHalfDay = false;
-        let status = "present";
-
-        if (lateCount < MONTHLY_LATE_QUOTA) {
-            if (totalMinutes <= LATE_TRIGGER) {
-                // ≤ 10:15 → on time
-            } else if (totalMinutes <= LATE_CUTOFF) {
-                isLate = true;                        // 10:16–10:30 → late
-            } else {
-                isHalfDay = true; status = "half-day"; // > 10:30 → half-day
-            }
-        } else {
-            if (totalMinutes <= ONTIME_CUTOFF_P2) {
-                // ≤ 10:05 → on time (quota exhausted)
-            } else {
-                isHalfDay = true; status = "half-day";
-            }
+        if (!attendance.isShortLeave && evalResult.isShortLeave) {
+            await updateShortLeaveBalance(correction.user, attendance.punchOut, "deduct");
+        } else if (attendance.isShortLeave && !evalResult.isShortLeave) {
+            await updateShortLeaveBalance(correction.user, attendance.punchOut, "restore");
         }
 
-        const shiftStartIST = correctionDateIST.clone().hour(10).minute(0).second(0);
-        const lateMinutes = (isLate || isHalfDay)
-            ? parseFloat(Math.max(0, punchInIST.diff(shiftStartIST, "minutes")).toFixed(2))
-            : 0;
+        attendance.isLate = evalResult.isLate;
+        attendance.isHalfDay = evalResult.isHalfDay;
+        attendance.status = evalResult.status;
+        attendance.lateMinutes = evalResult.lateMinutes;
+        attendance.workHours = evalResult.workHours;
+        attendance.overtime = evalResult.overtime;
+        attendance.isShortLeave = evalResult.isShortLeave;
+        attendance.eightHourPassUsed = evalResult.eightHourPassUsed;
 
-        attendance.isLate = isLate;
-        attendance.isHalfDay = isHalfDay;
-        attendance.status = status;
-        attendance.lateMinutes = lateMinutes;
+        // ── Explicitly resolve MPO ──
+        if (correction.oldStatus === "missing_punch_out") {
+            attendance.mpoResolved = true;
+        }
+        correction.newStatus = evalResult.status;
+    } else {
+        attendance.workHours = 0;
     }
 
     attendance.isOverridden = true;
@@ -295,20 +276,30 @@ const getMyCorrections = async (req, res) => {
 // ─────────────────────────────────────────────
 const getAllCorrections = async (req, res) => {
     try {
-        const { status, limit } = req.query;
+        const { status, page = 1, limit = 10 } = req.query;
         const filter = {};
         if (status) filter.status = status;
 
-        let query = AttendanceCorrection.find(filter)
+        const pageNumber = parseInt(page, 10) || 1;
+        const limitNumber = parseInt(limit, 10) || 10;
+        const skip = (pageNumber - 1) * limitNumber;
+
+        const total = await AttendanceCorrection.countDocuments(filter);
+
+        const corrections = await AttendanceCorrection.find(filter)
             .populate("user", "name email employeeId department designation")
             .populate("actionBy", "name")
-            .sort({ createdAt: -1 });
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limitNumber);
 
-        if (limit) query = query.limit(parseInt(limit));
-
-        const corrections = await query;
-
-        res.status(200).json({ success: true, count: corrections.length, corrections });
+        res.status(200).json({ 
+            success: true, 
+            data: corrections, 
+            total, 
+            page: pageNumber, 
+            totalPages: Math.ceil(total / limitNumber) 
+        });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }

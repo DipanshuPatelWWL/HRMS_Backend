@@ -5,7 +5,10 @@ const Leave = require("../models/leave.model");
 const { createNotification } = require("./notification.controller");
 const { sendMail } = require("../services/emailClient");
 const moment = require("moment-timezone");
+const { evaluateAttendance, getShiftConfig, updateShortLeaveBalance } = require("../utils/attendanceEvaluation");
+const attendanceService = require("../utils/attendanceService");
 const isDev = process.env.NODE_ENV !== "production";
+
 // ─────────────────────────────────────────────
 //  OFFICE CONFIG
 // ─────────────────────────────────────────────
@@ -13,725 +16,57 @@ const OFFICE_LAT = 28.615965009689685;
 const OFFICE_LNG = 77.37918363418639;
 const GEOFENCE_RADIUS = 50; // meters
 
-
-// ─────────────────────────────────────────────
-//  OFFICE NETWORK CONFIG
-// ─────────────────────────────────────────────
-const OFFICE_SUBNETS = process.env.OFFICE_SUBNETS
-    ? process.env.OFFICE_SUBNETS.split(",").map(s => s.trim())
-    : ["192.168.1.", "192.168.2.", "192.168.29."];
-
 const ALLOWED_DEVICES = [
-    {
-        deviceUUID: "03000200-0400-0500-0006-000700080009",
-        productId: "00331-10000-00001-AA159",
-        label: "Bhupendra Office PC",
-    },
-    {
-        deviceUUID: "FF9C4A14-678F-6F64-7353-E89C2511E53C",
-        productId: "00331-10000-00001-AA316",
-        label: "Jahid Office PC",
-    },
-    {
-        deviceUUID: "03000200-0400-0500-0006-000700080009",
-        productId: "00331-10000-00001-AA620",
-        label: "Santosh Office PC",
-    },
-    {
-        deviceUUID: "03000200-0400-0500-0006-000700080009",
-        productId: "00330-80000-00000-AA007",
-        label: "Anjali Office PC",
-    },
-    {
-        deviceUUID: "03000200-0400-0500-0006-000700080009",
-        productId: "00331-10000-00001-AA351",
-        label: "Rajesh Office PC",
-    },
-    {
-        deviceUUID: "BCCB94D0-B8C8-9A11-A0E7-047C16132135",
-        productId: "00355-79631-62791-AAOEM",
-        label: "Dinkar Office PC",
-    },
-    {
-        deviceUUID: "03000200-0400-0500-0006-000700080009",
-        productId: "00331-10000-00001-AA611",
-        label: "Hemant Office PC",
-    },
-    {
-        deviceUUID: "4C4C4544-0032-4D10-8043-B4C04F504C32",
-        productId: "00342-50786-03990-AAOEM",
-        label: "Dipanshu Office PC",
-    },
-    {
-        deviceUUID: "03000200-0400-0500-0006-000700080009",
-        productId: "00329-00000-00003-AA198",
-        label: "Desk-3 Office PC",
-    },
+    { deviceUUID: "03000200-0400-0500-0006-000700080009", productId: "00331-10000-00001-AA159", label: "Bhupendra Office PC" },
+    { deviceUUID: "FF9C4A14-678F-6F64-7353-E89C2511E53C", productId: "00331-10000-00001-AA316", label: "Jahid Office PC" },
+    { deviceUUID: "03000200-0400-0500-0006-000700080009", productId: "00331-10000-00001-AA620", label: "Santosh Office PC" },
+    { deviceUUID: "03000200-0400-0500-0006-000700080009", productId: "00330-80000-00000-AA007", label: "Anjali Office PC" },
+    { deviceUUID: "03000200-0400-0500-0006-000700080009", productId: "00331-10000-00001-AA351", label: "Rajesh Office PC" },
+    { deviceUUID: "BCCB94D0-B8C8-9A11-A0E7-047C16132135", productId: "00355-79631-62791-AAOEM", label: "Dinkar Office PC" },
+    { deviceUUID: "03000200-0400-0500-0006-000700080009", productId: "00331-10000-00001-AA611", label: "Hemant Office PC" },
+    { deviceUUID: "4C4C4544-0032-4D10-8043-B4C04F504C32", productId: "00342-50786-03990-AAOEM", label: "Dipanshu Office PC" },
+    { deviceUUID: "03000200-0400-0500-0006-000700080009", productId: "00329-00000-00003-AA198", label: "Desk-3 Office PC" }
 ];
 
-// ─────────────────────────────────────────────
-//  SHIFT TIMING (in minutes from midnight)
-// ─────────────────────────────────────────────
-const OFFICE_START = 10 * 60 + 0;   // 10:00 → shift starts
-const LATE_TRIGGER = 10 * 60 + 15;  // 10:15 → after this, quota consumed (Phase 1)
-const LATE_CUTOFF = 10 * 60 + 30;  // 10:30 → after this, half-day (quota NOT consumed)
-const ONTIME_CUTOFF_P2 = 10 * 60 + 5;   // 10:05 → grace period when quota exhausted (Phase 2)
 const MONTHLY_LATE_QUOTA = 3;
-const SHIFT_END_MINUTES = 17 * 60;
+const GRACE_MINUTES_BEFORE_SHIFT_END = 10;
 const MIN_WORK_HOURS = 9;
 const LENIENCY_WORK_HOURS = 8;
-const GRACE_MINUTES_BEFORE_SHIFT_END = 10;
 const MONTHLY_8HR_PASS_LIMIT = 1;
-
 const SHORT_LEAVE_WINDOW_OPEN = 17 * 60 + 59;
 const SHORT_LEAVE_WINDOW_CLOSE = 18 * 60 + 45;
 
-const formatTime = (date) =>
-    moment(date).tz("Asia/Kolkata").format("hh:mm a");
+const formatTime = (date) => moment(date).tz("Asia/Kolkata").format("hh:mm a");
 
-
-
-// ── Derive shift config for a user ──────────────────────────────────
-// Returns timing constants derived from the user's shift document.
-// If shift.type === "default" the classic 10–19 + quota rules apply.
-const getShiftConfig = (shift) => {
-    const s = shift || {};
-    const startH = s.startHour ?? 10;
-    const startM = s.startMinute ?? 0;
-    const endH = s.endHour ?? 19;
-    const endM = s.endMinute ?? 0;
-    const grace = s.graceMinutes ?? 15;  // late trigger
-    const halfAt = s.halfDayAfterMinutes ?? 30;  // half-day trigger
-
-    const shiftStart = startH * 60 + startM;
-    const lateTrigger = shiftStart + grace;
-    const halfDayCutoff = shiftStart + halfAt;
-    const shiftEnd = endH * 60 + endM;
-
-    // quota rules only apply to the DEFAULT 10:00–19:00 shift
-    const isDefaultShift =
-        (s.type === "default" || !s.type) &&
-        startH === 10 && startM === 0 &&
-        endH === 19 && endM === 0;
-
-    // Phase-2 grace (quota exhausted): 5 min after shift start
-    const onTimeCutoffP2 = shiftStart + 5;
-
-    return {
-        shiftStart,
-        lateTrigger,
-        halfDayCutoff,
-        shiftEnd,
-        onTimeCutoffP2,
-        isDefaultShift,
-    };
-};
-
-// ─────────────────────────────────────────────
-//  HELPERS
-// ─────────────────────────────────────────────
 const isWeekend = (date) => {
     const day = moment(date).tz("Asia/Kolkata").day();
     return day === 0 || day === 6;
 };
 
 const toRad = (v) => (v * Math.PI) / 180;
-
 const getDistance = (lat1, lng1, lat2, lng2) => {
     const R = 6371000;
     const dLat = toRad(lat2 - lat1);
     const dLng = toRad(lng2 - lng1);
-    const a =
-        Math.sin(dLat / 2) ** 2 +
-        Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
-
-
-// ─────────────────────────────────────────────
-//  PUNCH IN
-// ─────────────────────────────────────────────
-// const punchIn = async (req, res) => {
-//     try {
-//         const userId = req.user._id;
-
-//         const {
-//             deviceId,
-//             wifiSSID,
-//             isOfflinePunch,
-//             offlineTimestamp,
-//             deviceUUID,
-//             productId,
-//             lat,
-//             lng,
-//             accuracy,
-//         } = req.body || {};
-
-//         const userDoc = await User.findById(userId)
-//             .select("shift reportingTo email name")
-//             .lean();
-
-//         const scForTiming = getShiftConfig(userDoc?.shift);
-//         // ─────────────────────────────────────────────
-//         // INDIA TIMEZONE
-//         // ─────────────────────────────────────────────
-//         const serverNow = moment().tz("Asia/Kolkata");
-
-//         // Offline timestamp validation
-//         let now = serverNow.clone();
-
-//         if (isOfflinePunch) {
-
-//             if (!offlineTimestamp) {
-//                 return res.status(400).json({
-//                     success: false,
-//                     message: "Offline timestamp required",
-//                 });
-//             }
-
-//             const parsedOfflineTime = moment
-//                 .tz(offlineTimestamp, "Asia/Kolkata");
-
-//             if (!parsedOfflineTime.isValid()) {
-//                 return res.status(400).json({
-//                     success: false,
-//                     message: "Invalid offline timestamp",
-//                 });
-//             }
-
-//             // Allow only last 2 hours offline sync
-//             const diffMinutes = serverNow.diff(parsedOfflineTime, "minutes");
-
-//             if (diffMinutes > 120) {
-//                 return res.status(400).json({
-//                     success: false,
-//                     message: "Offline punch expired",
-//                 });
-//             }
-
-//             // Prevent future timestamps
-//             if (diffMinutes < 0) {
-//                 return res.status(400).json({
-//                     success: false,
-//                     message: "Future timestamp not allowed",
-//                 });
-//             }
-
-//             now = parsedOfflineTime.clone();
-//         }
-
-//         const nowDate = now.toDate();
-
-//         // Attendance date
-//         const todayStart = now.clone().startOf("day").toDate();
-//         const todayEnd = now.clone().endOf("day").toDate();
-//         const todayString = now.clone().format("YYYY-MM-DD");
-//         const totalMinutesNow = now.hour() * 60 + now.minute();
-
-//         const windowOpen = (scForTiming.shiftStart - 60 + 1440) % 1440;  // 1 hr before start
-//         const windowClose = (scForTiming.shiftEnd + 60) % 1440;          // 1 hr after end
-
-//         // Overnight window: windowOpen > windowClose (e.g. 720 open, 120 close for 1 PM–1 AM)
-//         const inWindow = windowOpen <= windowClose
-//             ? totalMinutesNow >= windowOpen && totalMinutesNow <= windowClose
-//             : totalMinutesNow >= windowOpen || totalMinutesNow <= windowClose;
-
-//         if (!inWindow) {
-//             const fmt = (m) => {
-//                 const h = Math.floor(m / 60) % 24;
-//                 const min = m % 60;
-//                 const ap = h >= 12 ? "PM" : "AM";
-//                 return `${h % 12 || 12}:${String(min).padStart(2, "0")} ${ap}`;
-//             };
-//             return res.status(400).json({
-//                 success: false,
-//                 message: `Punch-in allowed only between ${fmt(windowOpen)} and ${fmt(windowClose)}`,
-//             });
-//         }
-
-//         // ─────────────────────────────────────────────
-//         // WEEKEND CHECK
-//         // ─────────────────────────────────────────────
-//         if (now.day() === 0 || now.day() === 6) {
-//             return res.status(400).json({
-//                 success: false,
-//                 message: "Office is closed on weekends",
-//             });
-//         }
-
-//         // ─────────────────────────────────────────────
-//         // HOLIDAY CHECK
-//         // ─────────────────────────────────────────────
-//         const holiday = await Holiday.findOne({
-//             date: {
-//                 $gte: todayStart,
-//                 $lte: todayEnd,
-//             },
-//         });
-
-//         if (holiday) {
-//             return res.status(400).json({
-//                 success: false,
-//                 message: `Today is a holiday: ${holiday.name}`,
-//             });
-//         }
-
-//         // ─────────────────────────────────────────────
-//         // LEAVE CHECK
-//         // ─────────────────────────────────────────────
-//         // FIX #14: only block full-day leaves; half-day leaves allow punch-in (mark isHalfDay automatically)
-//         const leave = await Leave.findOne({
-//             user: userId,
-//             status: "approved",
-//             fromDate: { $lte: todayEnd },
-//             toDate: { $gte: todayStart },
-//         });
-
-//         if (leave) {
-//             const isHalfDayLeave = leave.leaveType === "half-day" || leave.halfDay === true;
-//             if (!isHalfDayLeave) {
-//                 return res.status(400).json({
-//                     success: false,
-//                     message: "You are on approved leave",
-//                 });
-//             }
-//             // Half-day leave: allow punch-in but pre-mark isHalfDay
-//             // This flag will be picked up below when saving the attendance record
-//             req._halfDayLeave = true;
-//         }
-
-
-//         // ─────────────────────────────────────────────
-//         // DEVICE / LOCATION VERIFICATION
-//         // ─────────────────────────────────────────────
-
-//         let verifiedBy = null;
-//         let clientIP = (req.socket?.remoteAddress || "").replace(/^::ffff:/, "");
-
-//         if (isOfflinePunch) {
-//             verifiedBy = "offline";
-
-//         } else {
-//             // ── STEP 1: Try device verification first ────────────────────
-//             let deviceMatched = false;
-
-//             if (deviceUUID && productId) {
-//                 const incomingUUID = deviceUUID.trim().toUpperCase();
-//                 const incomingProduct = productId.trim().toUpperCase();
-
-//                 // ✅ Match by both UUID + ProductId
-//                 let matchedDevice = ALLOWED_DEVICES.find(d => {
-//                     const uuidOk = d.deviceUUID.trim().toUpperCase() === incomingUUID;
-//                     const productOk = d.productId.trim().toUpperCase() === incomingProduct;
-//                     return uuidOk && productOk;
-//                 });
-
-//                 // ✅ Fallback — match by ProductId only
-//                 // UUID 03000200 is generic/shared across many PCs
-//                 if (!matchedDevice) {
-//                     matchedDevice = ALLOWED_DEVICES.find(d =>
-//                         d.productId.trim().toUpperCase() === incomingProduct
-//                     );
-//                 }
-
-//                 if (matchedDevice) {
-//                     verifiedBy = "device";
-//                     deviceMatched = true;
-//                 } else {
-//                     console.log(`❌ Not matched — Please Check Your Ids`);
-//                 }
-//             }
-
-//             // ── STEP 2: Device not matched → try location ────────────────
-//             if (!deviceMatched) {
-//                 if (lat === undefined || lat === null || lng === undefined || lng === null) {
-//                     return res.status(403).json({
-//                         success: false,
-//                         message: "Device not recognised. Please enable GPS to punch in from your current location.",
-//                     });
-//                 }
-
-//                 if (isNaN(Number(lat)) || isNaN(Number(lng))) {
-//                     return res.status(400).json({
-//                         success: false,
-//                         message: "Invalid location coordinates received.",
-//                     });
-//                 }
-
-//                 const dist = getDistance(Number(lat), Number(lng), OFFICE_LAT, OFFICE_LNG);
-
-//                 if (dist > GEOFENCE_RADIUS) {
-//                     return res.status(403).json({
-//                         success: false,
-//                         message: `You are ${Math.round(dist)}m away from office. Move closer or use an authorised office computer.`,
-//                     });
-//                 }
-
-//                 if (accuracy !== undefined && Number(accuracy) > 150) {
-//                     return res.status(403).json({
-//                         success: false,
-//                         message: "GPS accuracy is too low. Please try again in open space.",
-//                     });
-//                 }
-//                 verifiedBy = "location";
-//             }
-//         }
-
-//         // ─────────────────────────────────────────────
-//         // DUPLICATE CHECK
-//         // ─────────────────────────────────────────────
-//         const existing = await Attendance.findOne({
-//             user: userId,
-//             dateString: todayString,
-//         })
-//             .select("_id punchOut")
-//             .lean();
-
-//         if (existing) {
-//             return res.status(400).json({
-//                 success: false,
-//                 message: existing.punchOut
-//                     ? "Attendance already completed for today"
-//                     : "Already punched in — please punch out first",
-//             });
-//         }
-
-//         // ─────────────────────────────────────────────
-//         // DEVICE VALIDATION
-//         // ─────────────────────────────────────────────
-//         if (deviceId) {
-
-//             const lastAttendance = await Attendance
-//                 .findOne({ user: userId })
-//                 .sort({ createdAt: -1 })
-//                 .select("deviceId")
-//                 .lean();
-
-//             if (
-//                 lastAttendance &&
-//                 lastAttendance.deviceId &&
-//                 lastAttendance.deviceId !== deviceId
-//             ) {
-//                 const io = req.app.get("io");
-
-//                 // Fire-and-forget — device alert must never crash punch-in
-//                 createNotification(
-//                     io,
-//                     userId,
-//                     "⚠️ Device Changed",
-//                     `${req.user.name} used a new device for attendance`,
-//                     "security",
-//                     {
-//                         userId,
-//                         oldDevice: lastAttendance.deviceId,
-//                         newDevice: deviceId,
-//                     }
-//                 ).catch(err => console.error("Device change notification error:", err));
-//             }
-//         }
-
-//         // ─────────────────────────────────────────────
-//         // LATE / HALF DAY LOGIC
-//         // ─────────────────────────────────────────────
-//         const sc = getShiftConfig(userDoc?.shift);
-
-//         const monthStart = now.clone().startOf("month").toDate();
-//         const monthEnd = now.clone().endOf("month").toDate();
-
-//         const lateCount = await Attendance.countDocuments({
-//             user: userId,
-//             date: { $gte: monthStart, $lte: monthEnd },
-//             isLate: true,
-//         });
-
-//         // FIX #1: removed duplicate `const now = rawNow` re-declaration
-//         // `now` is already the correct IST moment from the top of punchIn
-//         const totalMinutes = now.hour() * 60 + now.minute();
-
-//         let isLate = false;
-//         let isHalfDay = false;
-//         let status = "present";
-
-//         if (sc.isDefaultShift) {
-//             // ── DEFAULT 10:00–19:00 shift: full 3-quota logic ──────────
-//             if (lateCount < MONTHLY_LATE_QUOTA) {
-//                 // Phase 1
-//                 if (totalMinutes <= sc.lateTrigger) {
-//                     // on time
-//                 } else if (totalMinutes <= sc.halfDayCutoff) {
-//                     isLate = true;
-//                     status = "present";
-//                 } else {
-//                     isHalfDay = true;
-//                     status = "half-day";
-//                 }
-//             } else {
-//                 // Phase 2 — quota exhausted
-//                 if (totalMinutes <= sc.onTimeCutoffP2) {
-//                     // on time (within 5-min grace)
-//                 } else {
-//                     isHalfDay = true;
-//                     status = "half-day";
-//                 }
-//             }
-//         } else {
-//             // ── CUSTOM shift: simple late / half-day, NO quota ──────────
-//             if (totalMinutes <= sc.lateTrigger) {
-//                 // on time
-//             } else if (totalMinutes <= sc.halfDayCutoff) {
-//                 isLate = true;
-//                 status = "present";
-//             } else {
-//                 isHalfDay = true;
-//                 status = "half-day";
-//             }
-//         }
-
-//         // ─────────────────────────────────────────────
-//         // LATE MINUTES
-//         // ─────────────────────────────────────────────
-//         // FIX #3: derive shift start from sc.shiftStart (minutes from midnight) not hardcoded 10:00
-//         const shiftStartHour = Math.floor(sc.shiftStart / 60);
-//         const shiftStartMinute = sc.shiftStart % 60;
-
-//         const shiftStart = now.clone()
-//             .hour(shiftStartHour)
-//             .minute(shiftStartMinute)
-//             .second(0);
-
-//         const lateMinutes =
-//             isLate
-//                 ? Math.max(0, now.diff(shiftStart, "minutes"))
-//                 : 0;
-
-//         // ─────────────────────────────────────────────
-//         // SAVE ATTENDANCE
-//         // ─────────────────────────────────────────────
-//         let attendance;
-
-//         try {
-//             if (req._halfDayLeave) {
-//                 isHalfDay = true;
-//                 status = "half-day";
-//             }
-
-//             attendance = await Attendance.create({
-//                 user: userId,
-//                 date: todayStart,
-//                 dateString: todayString,
-//                 punchIn: nowDate,
-//                 lateMinutes,
-//                 isLate,
-//                 isHalfDay,
-//                 status,
-//                 location: {
-//                     lat,
-//                     lng,
-//                     accuracy,
-//                 },
-//                 deviceId: deviceId || "",
-//                 deviceUUID: deviceUUID || "",   // Windows hardware UUID
-//                 productId: productId || "",   // Windows Product ID
-//                 wifiSSID: wifiSSID || "",
-//                 isOfflinePunch: !!isOfflinePunch,
-//                 syncedAt: isOfflinePunch
-//                     ? serverNow.toDate()
-//                     : null,
-//                 verifiedBy,   // "device" | "device_partial" | "location" | "offline"
-//                 clientIP,
-//             });
-
-//         } catch (err) {
-
-//             // Handle duplicate race condition
-//             if (err.code === 11000) {
-//                 return res.status(400).json({
-//                     success: false,
-//                     message: "Attendance already exists for today",
-//                 });
-//             }
-
-//             throw err;
-//         }
-
-//         // ─────────────────────────────────────────────
-//         // EMAIL ALERT
-//         // ─────────────────────────────────────────────
-//         if (isHalfDay || isLate) {
-//             if (userDoc?.email) {
-//                 sendMail({
-//                     to: userDoc.email,
-//                     subject: isHalfDay
-//                         ? "⚠️ Half Day Marked"
-//                         : "⏰ Late Arrival Recorded",
-//                     html: `
-//             <p>
-//                 Hi ${userDoc.name},
-//                 your punch-in at
-//                 <b>${formatTime(nowDate)}</b>
-//                 has been recorded as
-//                 <b>${isHalfDay ? "Half Day" : "Late"}</b>.
-//             </p>
-//         `,
-//                 }).catch(err =>
-//                     console.error("Email error:", err)
-//                 );
-//             }
-//         }
-
-//         // ─────────────────────────────────────────────
-//         // HR / MANAGER NOTIFICATIONS
-//         // ─────────────────────────────────────────────
-//         const io = req.app.get("io");
-
-//         // ─────────────────────────────────────────────
-//         // START DESKTOP TRACKER
-//         // ─────────────────────────────────────────────
-
-//         io.to(`user_${userId}`).emit(
-//             "tracker:start",
-//             {
-//                 attendanceId: attendance._id,
-//                 timestamp: new Date(),
-//             }
-//         );
-
-//         const employeeName =
-//             req.user.name || "An employee";
-
-//         const punchTime = formatTime(nowDate);
-
-//         let statusLabel = "✅ On Time";
-
-//         if (isHalfDay) {
-//             statusLabel = "⚠️ Half Day";
-//         } else if (isLate) {
-//             statusLabel = `⏰ Late (+${lateMinutes}m)`;
-//         }
-
-//         // ─────────────────────────────────────────────
-//         // HR / TL / MANAGER NOTIFICATIONS ONLY
-//         // ─────────────────────────────────────────────
-//         const notifyUsersRaw = await User.find({
-//             $or: [
-//                 { role: { $in: ["hr", "manager", "admin"] } },
-//                 ...(userDoc?.reportingTo
-//                     ? [{ _id: userDoc.reportingTo }]
-//                     : []),
-//             ]
-//         })
-//             .select("_id")
-//             .lean();
-
-//         // Deduplicate by string ID to avoid double-notifying
-//         const notifyIdSet = new Set();
-//         for (const u of notifyUsersRaw) {
-//             const sid = u._id.toString();
-//             if (sid !== userId.toString()) notifyIdSet.add(sid);
-//         }
-
-//         res.status(201).json({
-//             success: true,
-//             message: "Punch-in successful",
-//             attendance,
-//             lateQuotaUsed: isLate ? lateCount + 1 : lateCount,
-//             lateQuotaMax: MONTHLY_LATE_QUOTA,
-//         });
-
-//         setImmediate(() => {
-//             Promise.allSettled(
-//                 [...notifyIdSet].map(sid =>
-//                     createNotification(
-//                         io,
-//                         sid,
-//                         `${employeeName} Punched In`,
-//                         `Punched in at ${punchTime} — ${statusLabel}`,
-//                         "attendance",
-//                         {
-//                             userId,
-//                             attendanceId: attendance._id,
-//                             status,
-//                             isLate,
-//                             isHalfDay,
-//                         }
-//                     )
-//                 )
-//             ).catch(err =>
-//                 console.error("Notification error:", err)
-//             );
-//         });
-
-//         return;
-
-//     } catch (error) {
-
-//         console.error("PunchIn Error:", error);
-
-//         res.status(500).json({
-//             success: false,
-//             message: error.message,
-//         });
-//     }
-// };
-
-
 
 const punchIn = async (req, res) => {
     try {
         const userId = req.user._id;
+        const { deviceId, wifiSSID, isOfflinePunch, offlineTimestamp, deviceUUID, productId, lat, lng, accuracy } = req.body || {};
 
-        const {
-            deviceId,
-            wifiSSID,
-            isOfflinePunch,
-            offlineTimestamp,
-            deviceUUID,
-            productId,
-            lat,
-            lng,
-            accuracy,
-        } = req.body || {};
-
-        // ─────────────────────────────────────────────
-        // STEP 1 — COMPUTE TIMESTAMPS FIRST (no DB)
-        // ─────────────────────────────────────────────
         const serverNow = moment().tz("Asia/Kolkata");
-
         let now = serverNow.clone();
 
         if (isOfflinePunch) {
-            if (!offlineTimestamp) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Offline timestamp required",
-                });
-            }
-
+            if (!offlineTimestamp) return res.status(400).json({ success: false, message: "Offline timestamp required" });
             const parsedOfflineTime = moment.tz(offlineTimestamp, "Asia/Kolkata");
-
-            if (!parsedOfflineTime.isValid()) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Invalid offline timestamp",
-                });
-            }
-
+            if (!parsedOfflineTime.isValid()) return res.status(400).json({ success: false, message: "Invalid offline timestamp" });
             const diffMinutes = serverNow.diff(parsedOfflineTime, "minutes");
-
-            if (diffMinutes > 120) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Offline punch expired",
-                });
-            }
-
-            if (diffMinutes < 0) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Future timestamp not allowed",
-                });
-            }
-
+            if (diffMinutes > 60) return res.status(400).json({ success: false, message: "Offline punch expired" });
+            if (diffMinutes < -60) return res.status(400).json({ success: false, message: "Future timestamp not allowed" });
             now = parsedOfflineTime.clone();
         }
 
@@ -743,269 +78,127 @@ const punchIn = async (req, res) => {
         const monthEnd = now.clone().endOf("month").toDate();
         const totalMinutes = now.hour() * 60 + now.minute();
 
-        // ─────────────────────────────────────────────
-        // STEP 2 — WEEKEND CHECK (no DB, free)
-        // ─────────────────────────────────────────────
         if (now.day() === 0 || now.day() === 6) {
-            return res.status(400).json({
-                success: false,
-                message: "Office is closed on weekends",
-            });
+            return res.status(400).json({ success: false, message: "Office is closed on weekends" });
         }
 
-        // ─────────────────────────────────────────────
-        // STEP 3 — ALL DB READS IN PARALLEL
-        // ─────────────────────────────────────────────
         const [userDoc, holiday, leave, existing, lateCount] = await Promise.all([
-
-            User.findById(userId)
-                .select("shift reportingTo email name")
-                .lean(),
-
-            Holiday.findOne({
-                date: { $gte: todayStart, $lte: todayEnd },
-            }).lean(),
-
-            Leave.findOne({
-                user: userId,
-                status: "approved",
-                fromDate: { $lte: todayEnd },
-                toDate: { $gte: todayStart },
-            }).lean(),
-
-            Attendance.findOne({ user: userId, dateString: todayString })
-                .select("_id punchOut")
-                .lean(),
-
-            Attendance.countDocuments({
-                user: userId,
-                date: { $gte: monthStart, $lte: monthEnd },
-                isLate: true,
-            }),
+            User.findById(userId).select("shift reportingTo email name").lean(),
+            Holiday.findOne({ date: { $gte: todayStart, $lte: todayEnd } }).lean(),
+            Leave.findOne({ user: userId, status: "approved", fromDate: { $lte: todayEnd }, toDate: { $gte: todayStart } }).lean(),
+            Attendance.findOne({ user: userId, dateString: todayString }).select("_id punchOut").lean(),
+            Attendance.countDocuments({ user: userId, date: { $gte: monthStart, $lte: monthEnd }, isLate: true })
         ]);
 
-        // ─────────────────────────────────────────────
-        // STEP 4 — GUARD CHECKS (memory only, no DB)
-        // ─────────────────────────────────────────────
+        if (holiday) return res.status(400).json({ success: false, message: `Today is a holiday: ${holiday.name}` });
 
-        // Holiday
-        if (holiday) {
-            return res.status(400).json({
-                success: false,
-                message: `Today is a holiday: ${holiday.name}`,
-            });
-        }
-
-        // Leave
         let isHalfDayLeaveOverride = false;
         if (leave) {
             const isHalfDayLeave = leave.leaveType === "half-day" || leave.halfDay === true;
-            if (!isHalfDayLeave) {
-                return res.status(400).json({
-                    success: false,
-                    message: "You are on approved leave",
-                });
-            }
+            if (!isHalfDayLeave) return res.status(400).json({ success: false, message: "You are on approved leave" });
             isHalfDayLeaveOverride = true;
         }
 
-        // Duplicate punch-in
         if (existing) {
-            return res.status(400).json({
-                success: false,
-                message: existing.punchOut
-                    ? "Attendance already completed for today"
-                    : "Already punched in — please punch out first",
-            });
+            return res.status(400).json({ success: false, message: existing.punchOut ? "Attendance already completed for today" : "Already punched in — please punch out first" });
         }
 
-        // ─────────────────────────────────────────────
-        // STEP 5 — SHIFT WINDOW CHECK
-        // ─────────────────────────────────────────────
         const sc = getShiftConfig(userDoc?.shift);
         const windowOpen = (sc.shiftStart - 60 + 1440) % 1440;
         const windowClose = (sc.shiftEnd + 60) % 1440;
-
-        const inWindow = windowOpen <= windowClose
-            ? totalMinutes >= windowOpen && totalMinutes <= windowClose
-            : totalMinutes >= windowOpen || totalMinutes <= windowClose;
+        const inWindow = windowOpen <= windowClose ? totalMinutes >= windowOpen && totalMinutes <= windowClose : totalMinutes >= windowOpen || totalMinutes <= windowClose;
 
         if (!inWindow) {
-            const fmt = (m) => {
-                const h = Math.floor(m / 60) % 24;
-                const mn = m % 60;
-                const ap = h >= 12 ? "PM" : "AM";
-                return `${h % 12 || 12}:${String(mn).padStart(2, "0")} ${ap}`;
-            };
-            return res.status(400).json({
+            const fmt = (m) => { const h = Math.floor(m / 60) % 24; const mn = m % 60; const ap = h >= 12 ? "PM" : "AM"; return `${h % 12 || 12}:${String(mn).padStart(2, "0")} ${ap}`; };
+            return res.status(400).json({ success: false, message: `Punch-in allowed only between ${fmt(windowOpen)} and ${fmt(windowClose)}` });
+        }
+
+        const clientIP = (req.socket?.remoteAddress || "").replace(/^::ffff:/, "");
+
+        // ── Mobile Block ──────────────────────────────────────────────
+        const ua = req.headers["user-agent"] || "";
+        const clientType = req.headers["x-client-type"] || "";
+        const isMobile = /android|iphone|ipad|ipod|opera mini|iemobile|mobile/i.test(ua);
+        if (isMobile && clientType !== "electron") {
+            return res.status(403).json({
                 success: false,
-                message: `Punch-in allowed only between ${fmt(windowOpen)} and ${fmt(windowClose)}`,
+                message: "Attendance from mobile devices is not allowed"
             });
         }
 
-        // ─────────────────────────────────────────────
-        // STEP 6 — DEVICE / LOCATION VERIFICATION
-        // ─────────────────────────────────────────────
-        let verifiedBy = null;
-        const clientIP = (req.socket?.remoteAddress || "").replace(/^::ffff:/, "");
+        // ── WFH Detection ─────────────────────────────────────────────
+        const now2 = new Date();
+        const wlc = userDoc?.workLocationConfig;
+        const isWFH =
+            userDoc?.workLocation === "wfh" &&
+            wlc?.startDate && wlc?.endDate &&
+            now2 >= new Date(wlc.startDate) &&
+            now2 <= new Date(wlc.endDate);
+
+        let verifiedBy = "device";
 
         if (isOfflinePunch) {
             verifiedBy = "offline";
 
         } else {
-            let deviceMatched = false;
+            // ── Primary: deviceToken verification ─────────────────────
+            const { deviceToken } = req.body || {};
 
-            if (deviceUUID && productId) {
-                const incomingUUID = deviceUUID.trim().toUpperCase();
-                const incomingProduct = productId.trim().toUpperCase();
+            if (deviceToken) {
+                const fullUser = await User.findById(userId)
+                    .select("approvedDevices")
+                    .lean();
 
-                let matchedDevice = ALLOWED_DEVICES.find(d =>
-                    d.deviceUUID.trim().toUpperCase() === incomingUUID &&
-                    d.productId.trim().toUpperCase() === incomingProduct
+                const matchedDevice = fullUser?.approvedDevices?.find(
+                    d => d.deviceToken === deviceToken
                 );
 
-                // Fallback — match by ProductId only (generic UUIDs)
                 if (!matchedDevice) {
-                    matchedDevice = ALLOWED_DEVICES.find(d =>
-                        d.productId.trim().toUpperCase() === incomingProduct
-                    );
-                }
-
-                if (matchedDevice) {
-                    verifiedBy = "device";
-                    deviceMatched = true;
-                }
-            }
-
-            if (!deviceMatched) {
-                if (lat == null || lng == null) {
                     return res.status(403).json({
                         success: false,
-                        message: "Device not recognised. Please enable GPS to punch in from your current location.",
+                        message: "Device token invalid or revoked. Please contact HR."
                     });
                 }
 
-                if (isNaN(Number(lat)) || isNaN(Number(lng))) {
-                    return res.status(400).json({
-                        success: false,
-                        message: "Invalid location coordinates received.",
-                    });
-                }
+                // Update lastUsedAt
+                await User.updateOne(
+                    { _id: userId, "approvedDevices.deviceToken": deviceToken },
+                    { $set: { "approvedDevices.$.lastUsedAt": new Date() } }
+                );
 
-                const dist = getDistance(Number(lat), Number(lng), OFFICE_LAT, OFFICE_LNG);
+                verifiedBy = "device";
 
-                if (dist > GEOFENCE_RADIUS) {
-                    return res.status(403).json({
-                        success: false,
-                        message: `You are ${Math.round(dist)}m away from office. Move closer or use an authorised office computer.`,
-                    });
-                }
-
-                if (accuracy !== undefined && Number(accuracy) > 150) {
-                    return res.status(403).json({
-                        success: false,
-                        message: "GPS accuracy is too low. Please try again in open space.",
-                    });
-                }
-
+            } else if (isWFH) {
+                // ── WFH without token: allow location-based ───────────
                 verifiedBy = "location";
-            }
-        }
 
-        // ─────────────────────────────────────────────
-        // STEP 7 — DEVICE CHANGE ALERT (fire-and-forget)
-        // ─────────────────────────────────────────────
-        // Runs async — never awaited, never blocks punch-in
-        if (deviceId) {
-            Attendance
-                .findOne({ user: userId })
-                .sort({ createdAt: -1 })
-                .select("deviceId")
-                .lean()
-                .then(lastAttendance => {
-                    if (
-                        lastAttendance?.deviceId &&
-                        lastAttendance.deviceId !== deviceId
-                    ) {
-                        const io = req.app.get("io");
-                        createNotification(
-                            io,
-                            userId,
-                            "⚠️ Device Changed",
-                            `${req.user.name} used a new device for attendance`,
-                            "security",
-                            {
-                                userId,
-                                oldDevice: lastAttendance.deviceId,
-                                newDevice: deviceId,
-                            }
-                        ).catch(err => console.error("Device change notification error:", err));
-                    }
-                })
-                .catch(err => console.error("Device history lookup error:", err));
-        }
-
-        // ─────────────────────────────────────────────
-        // STEP 8 — LATE / HALF-DAY LOGIC
-        // ─────────────────────────────────────────────
-        let isLate = false;
-        let isHalfDay = isHalfDayLeaveOverride; // pre-set if half-day leave
-        let status = isHalfDayLeaveOverride ? "half-day" : "present";
-
-        if (!isHalfDayLeaveOverride) {
-            if (sc.isDefaultShift) {
-                if (lateCount < MONTHLY_LATE_QUOTA) {
-                    if (totalMinutes <= sc.lateTrigger) {
-                        // on time
-                    } else if (totalMinutes <= sc.halfDayCutoff) {
-                        isLate = true;
-                        status = "present";
-                    } else {
-                        isHalfDay = true;
-                        status = "half-day";
-                    }
-                } else {
-                    // Quota exhausted — tighter grace
-                    if (totalMinutes > sc.onTimeCutoffP2) {
-                        isHalfDay = true;
-                        status = "half-day";
-                    }
-                }
             } else {
-                // Custom shift — simple late / half-day, no quota
-                if (totalMinutes <= sc.lateTrigger) {
-                    // on time
-                } else if (totalMinutes <= sc.halfDayCutoff) {
-                    isLate = true;
-                    status = "present";
-                } else {
-                    isHalfDay = true;
-                    status = "half-day";
-                }
+                // ── No token, not WFH: block ──────────────────────────
+                return res.status(403).json({
+                    success: false,
+                    message: "Device not approved. Please login first to request device approval from HR."
+                });
             }
         }
 
-        // ─────────────────────────────────────────────
-        // STEP 9 — LATE MINUTES
-        // ─────────────────────────────────────────────
-        const shiftStart = now.clone()
-            .hour(Math.floor(sc.shiftStart / 60))
-            .minute(sc.shiftStart % 60)
-            .second(0);
+        const evalResult = await evaluateAttendance({
+            userId,
+            attendanceId: null,
+            punchIn: nowDate,
+            punchOut: null,
+            isHalfDayLeaveOverride
+        });
 
-        const lateMinutes = isLate
-            ? Math.max(0, now.diff(shiftStart, "minutes"))
-            : 0;
+        const { isLate, isHalfDay, status, lateMinutes } = evalResult;
 
-        // ─────────────────────────────────────────────
-        // STEP 10 — SAVE ATTENDANCE
-        // ─────────────────────────────────────────────
         let attendance;
         try {
+            const { deviceToken, lat, lng, accuracy, deviceId, deviceUUID, productId, wifiSSID } = req.body || {};
             attendance = await Attendance.create({
                 user: userId,
                 date: todayStart,
                 dateString: todayString,
+                workLocation: isWFH ? "wfh" : "office",
                 punchIn: nowDate,
                 lateMinutes,
                 isLate,
@@ -1022,1598 +215,558 @@ const punchIn = async (req, res) => {
                 clientIP,
             });
         } catch (err) {
-            if (err.code === 11000) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Attendance already exists for today",
-                });
-            }
+            if (err.code === 11000) return res.status(400).json({ success: false, message: "Attendance already exists for today" });
             throw err;
         }
 
-        // ─────────────────────────────────────────────
-        // STEP 11 — RESPOND IMMEDIATELY
-        // ─────────────────────────────────────────────
         const io = req.app.get("io");
+        io.to(`user_${userId}`).emit("tracker:start", { attendanceId: attendance._id, timestamp: new Date() });
 
-        io.to(`user_${userId}`).emit("tracker:start", {
-            attendanceId: attendance._id,
-            timestamp: new Date(),
-        });
+        res.status(201).json({ success: true, message: "Punch-in successful", attendance, lateQuotaUsed: isLate ? lateCount + 1 : lateCount, lateQuotaMax: MONTHLY_LATE_QUOTA });
 
-        res.status(201).json({
-            success: true,
-            message: "Punch-in successful",
-            attendance,
-            lateQuotaUsed: isLate ? lateCount + 1 : lateCount,
-            lateQuotaMax: MONTHLY_LATE_QUOTA,
-        });
-
-        // ─────────────────────────────────────────────
-        // STEP 12 — POST-RESPONSE SIDE EFFECTS
-        // Everything below runs AFTER the client gets 201
-        // ─────────────────────────────────────────────
         setImmediate(async () => {
             try {
                 const employeeName = req.user.name || "An employee";
                 const punchTime = formatTime(nowDate);
-
                 let statusLabel = "✅ On Time";
                 if (isHalfDay) statusLabel = "⚠️ Half Day";
                 else if (isLate) statusLabel = `⏰ Late (+${lateMinutes}m)`;
 
-                // Email alert
                 if ((isHalfDay || isLate) && userDoc?.email) {
+                    let emailSubject = isHalfDay ? "⚠️ Half Day Marked" : "⏰ Late Arrival Recorded";
+                    let emailHtml = `<p>Hi ${userDoc.name}, your punch-in at <b>${formatTime(nowDate)}</b> has been recorded as <b>${isHalfDay ? "Half Day" : "Late"}</b>.</p>`;
+
+                    if (isHalfDay) {
+                        emailSubject = "Late Arrival - Half Day Recovery Available";
+                        emailHtml = `
+                            <p>Hi ${userDoc.name},</p>
+                            <p>You have reported after the permitted arrival time (<b>${formatTime(nowDate)}</b>) and your attendance is currently marked as <b>Half Day</b>.</p>
+                            <p>If you complete the required working hours for today, the system will automatically convert your attendance to <b>Present + Late</b> during final attendance evaluation at punch-out.</p>
+                            <p>No manual correction request is required.</p>
+                        `;
+                    }
+
                     sendMail({
                         to: userDoc.email,
-                        subject: isHalfDay ? "⚠️ Half Day Marked" : "⏰ Late Arrival Recorded",
-                        html: `
-                            <p>
-                                Hi ${userDoc.name}, your punch-in at
-                                <b>${formatTime(nowDate)}</b> has been recorded as
-                                <b>${isHalfDay ? "Half Day" : "Late"}</b>.
-                            </p>
-                        `,
+                        subject: emailSubject,
+                        html: emailHtml
                     }).catch(err => console.error("Email error:", err));
                 }
 
-                // HR / Manager notifications — fetched here, not before response
-                const notifyUsersRaw = await User.find({
-                    $or: [
-                        { role: { $in: ["hr", "manager", "admin"] } },
-                        ...(userDoc?.reportingTo ? [{ _id: userDoc.reportingTo }] : []),
-                    ],
-                })
-                    .select("_id")
-                    .lean();
-
-                const notifyIdSet = new Set(
-                    notifyUsersRaw
-                        .map(u => u._id.toString())
-                        .filter(sid => sid !== userId.toString())
-                );
-
-                await Promise.allSettled(
-                    [...notifyIdSet].map(sid =>
-                        createNotification(
-                            io,
-                            sid,
-                            `${employeeName} Punched In`,
-                            `Punched in at ${punchTime} — ${statusLabel}`,
-                            "attendance",
-                            {
-                                userId,
-                                attendanceId: attendance._id,
-                                status,
-                                isLate,
-                                isHalfDay,
-                            }
-                        )
-                    )
-                );
-            } catch (err) {
-                console.error("Post-response side-effect error:", err);
-            }
+                const notifyUsersRaw = await User.find({ $or: [{ role: { $in: ["hr", "manager", "admin"] } }, ...(userDoc?.reportingTo ? [{ _id: userDoc.reportingTo }] : [])] }).select("_id").lean();
+                const notifyIdSet = new Set(notifyUsersRaw.map(u => u._id.toString()).filter(sid => sid !== userId.toString()));
+                await Promise.allSettled([...notifyIdSet].map(sid => createNotification(io, sid, `${employeeName} Punched In`, `Punched in at ${punchTime} — ${statusLabel}`, "attendance", { userId, attendanceId: attendance._id, status, isLate, isHalfDay })));
+            } catch (err) { console.error(err); }
         });
-
     } catch (error) {
         console.error("PunchIn Error:", error);
-        res.status(500).json({
-            success: false,
-            message: error.message,
-        });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
 const punchOut = async (req, res) => {
     try {
-
         const userId = req.user._id;
-
-        const {
-            isOfflinePunch,
-            offlineTimestamp,
-        } = req.body || {};
-
-        // ─────────────────────────────────────────────
-        // INDIA TIMEZONE
-        // ─────────────────────────────────────────────
+        const { isOfflinePunch, offlineTimestamp } = req.body || {};
         const serverNow = moment().tz("Asia/Kolkata");
-
         let now = serverNow.clone();
 
-        // ─────────────────────────────────────────────
-        // OFFLINE VALIDATION
-        // ─────────────────────────────────────────────
         if (isOfflinePunch) {
-
-            if (!offlineTimestamp) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Offline timestamp required",
-                });
-            }
-
-            const parsedOfflineTime = moment
-                .tz(offlineTimestamp, "Asia/Kolkata");
-
-            if (!parsedOfflineTime.isValid()) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Invalid offline timestamp",
-                });
-            }
-
-            // Max 2 hours old
-            const diffMinutes =
-                serverNow.diff(parsedOfflineTime, "minutes");
-
-            if (diffMinutes > 120) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Offline punch expired",
-                });
-            }
-
-            // Prevent future timestamps
-            if (diffMinutes < 0) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Future timestamp not allowed",
-                });
-            }
-
+            if (!offlineTimestamp) return res.status(400).json({ success: false, message: "Offline timestamp required" });
+            const parsedOfflineTime = moment.tz(offlineTimestamp, "Asia/Kolkata");
+            if (!parsedOfflineTime.isValid()) return res.status(400).json({ success: false, message: "Invalid offline timestamp" });
+            const diffMinutes = serverNow.diff(parsedOfflineTime, "minutes");
+            if (diffMinutes > 60) return res.status(400).json({ success: false, message: "Offline punch expired" });
+            if (diffMinutes < -60) return res.status(400).json({ success: false, message: "Future timestamp not allowed" });
             now = parsedOfflineTime.clone();
         }
 
         const nowDate = now.toDate();
-
         const todayString = now.clone().format("YYYY-MM-DD");
         const todayStart = now.clone().startOf("day").toDate();
         const todayEnd = now.clone().endOf("day").toDate();
 
-        // ─────────────────────────────────────────────
-        // OFFICE TIMING CHECK (shift-aware)
-        // ─────────────────────────────────────────────
-        // Load shift to compute the allowed punch-out window:
-        // 1 hour before shift start → 1 hour after shift end.
         const userDocForOutTiming = await User.findById(userId).select("shift").lean();
         const scForOutTiming = getShiftConfig(userDocForOutTiming?.shift);
-
         const totalMinutesNowOut = now.hour() * 60 + now.minute();
-
         const outWindowOpen = (scForOutTiming.shiftStart - 60 + 1440) % 1440;
         const outWindowClose = (scForOutTiming.shiftEnd + 60) % 1440;
-
-        const inOutWindow = outWindowOpen <= outWindowClose
-            ? totalMinutesNowOut >= outWindowOpen && totalMinutesNowOut <= outWindowClose
-            : totalMinutesNowOut >= outWindowOpen || totalMinutesNowOut <= outWindowClose;
+        const inOutWindow = outWindowOpen <= outWindowClose ? totalMinutesNowOut >= outWindowOpen && totalMinutesNowOut <= outWindowClose : totalMinutesNowOut >= outWindowOpen || totalMinutesNowOut <= outWindowClose;
 
         if (!inOutWindow) {
-            const fmt = (m) => {
-                const h = Math.floor(m / 60) % 24;
-                const min = m % 60;
-                const ap = h >= 12 ? "PM" : "AM";
-                return `${h % 12 || 12}:${String(min).padStart(2, "0")} ${ap}`;
-            };
-            return res.status(400).json({
-                success: false,
-                message: `Punch-out allowed only between ${fmt(outWindowOpen)} and ${fmt(outWindowClose)}`,
-            });
+            const fmt = (m) => { const h = Math.floor(m / 60) % 24; const min = m % 60; const ap = h >= 12 ? "PM" : "AM"; return `${h % 12 || 12}:${String(min).padStart(2, "0")} ${ap}`; };
+            return res.status(400).json({ success: false, message: `Punch-out allowed only between ${fmt(outWindowOpen)} and ${fmt(outWindowClose)}` });
         }
 
-        // ─────────────────────────────────────────────
-        // WEEKEND CHECK
-        // ─────────────────────────────────────────────
-        if (now.day() === 0 || now.day() === 6) {
-            return res.status(400).json({
-                success: false,
-                message: "Office is closed on weekends",
-            });
-        }
+        if (now.day() === 0 || now.day() === 6) return res.status(400).json({ success: false, message: "Office is closed on weekends" });
 
-        // ─────────────────────────────────────────────
-        // HOLIDAY CHECK
-        // ─────────────────────────────────────────────
-        const holiday = await Holiday.findOne({
-            date: {
-                $gte: todayStart,
-                $lte: todayEnd,
-            },
-        });
+        const holiday = await Holiday.findOne({ date: { $gte: todayStart, $lte: todayEnd } });
+        if (holiday) return res.status(400).json({ success: false, message: `Today is a holiday: ${holiday.name}` });
 
-        if (holiday) {
-            return res.status(400).json({
-                success: false,
-                message: `Today is a holiday: ${holiday.name}`,
-            });
-        }
-
-        // ─────────────────────────────────────────────
-        // FIND ATTENDANCE (overnight-shift aware)
-        // ─────────────────────────────────────────────
-        let attendance = await Attendance.findOne({
-            user: userId,
-            dateString: todayString,
-        });
-
+        let attendance = await Attendance.findOne({ user: userId, dateString: todayString });
         if (!attendance || attendance.punchOut) {
             const yesterdayString = now.clone().subtract(1, "day").format("YYYY-MM-DD");
-            const yesterdayAtt = await Attendance.findOne({
-                user: userId,
-                dateString: yesterdayString,
-                punchOut: null,
-            });
+            const yesterdayAtt = await Attendance.findOne({ user: userId, dateString: yesterdayString, punchOut: null });
             if (yesterdayAtt) attendance = yesterdayAtt;
         }
-
         if (!attendance || attendance.punchOut) {
             const twoDaysAgoString = now.clone().subtract(2, "day").format("YYYY-MM-DD");
-            const twoDaysAgoAtt = await Attendance.findOne({
-                user: userId,
-                dateString: twoDaysAgoString,
-                punchOut: null,
-            });
+            const twoDaysAgoAtt = await Attendance.findOne({ user: userId, dateString: twoDaysAgoString, punchOut: null });
             if (twoDaysAgoAtt) attendance = twoDaysAgoAtt;
         }
 
-        if (!attendance) {
-            return res.status(404).json({
-                success: false,
-                message: "No punch-in found for today",
-            });
-        }
+        if (!attendance) return res.status(404).json({ success: false, message: "No punch-in found for today" });
+        if (attendance.punchOut) return res.status(400).json({ success: false, message: "Already punched out" });
+        if (moment(nowDate).isBefore(attendance.punchIn)) return res.status(400).json({ success: false, message: "Punch-out cannot be before punch-in" });
 
-        if (attendance.punchOut) {
-            return res.status(400).json({
-                success: false,
-                message: "Already punched out",
-            });
-        }
+        const leave = await Leave.findOne({ user: userId, status: "approved", fromDate: { $lte: todayEnd }, toDate: { $gte: todayStart } }).lean();
+        const isHalfDayLeaveOverride = leave ? (leave.leaveType === "half-day" || leave.halfDay === true) : false;
 
-        if (!attendance) {
-            return res.status(404).json({
-                success: false,
-                message: "No punch-in found for today",
-            });
-        }
-
-        if (attendance.punchOut) {
-            return res.status(400).json({
-                success: false,
-                message: "Already punched out",
-            });
-        }
-
-        // ─────────────────────────────────────────────
-        // INVALID TIME CHECK
-        // ─────────────────────────────────────────────
-        if (moment(nowDate).isBefore(attendance.punchIn)) {
-            return res.status(400).json({
-                success: false,
-                message: "Punch-out cannot be before punch-in",
-            });
-        }
-
-        // ─────────────────────────────────────────────
-        // WORK HOURS
-        // ─────────────────────────────────────────────
-        const workHours = parseFloat(
-            (
-                (nowDate - attendance.punchIn)
-                / (1000 * 60 * 60)
-            ).toFixed(2)
-        );
-
-        // FIX #9: declare at function scope so email and all downstream blocks access it safely
-        const roundedWorkHours = parseFloat(workHours.toFixed(2));
-
-        // ─────────────────────────────────────────────
-        // LOAD SHIFT CONFIG  (needed for overtime + half-day)
-        // ─────────────────────────────────────────────
-        const userDocOut = await User.findById(userId).select("shift").lean();
-        const scOut = getShiftConfig(userDocOut?.shift);
-
-
-        const shiftDurationMinutes =
-            scOut.shiftEnd > scOut.shiftStart
-                ? scOut.shiftEnd - scOut.shiftStart          // normal  e.g. 600 → 1140 = 540 min
-                : (1440 - scOut.shiftStart) + scOut.shiftEnd; // overnight e.g. 1320 → 420
-
-        const workedMinutes = Math.round(workHours * 60);
-        // Allow up to 10-minute shortfall (same as GRACE_MINUTES_BEFORE_SHIFT_END)
-        const shiftCompleted = workedMinutes >= (shiftDurationMinutes - GRACE_MINUTES_BEFORE_SHIFT_END);
-
-        // ─────────────────────────────────────────────
-        // OVERTIME
-        // ─────────────────────────────────────────────
-        // FIX #7: derive shift end from scOut config instead of hardcoded 19:00
-        const shiftEndHour = Math.floor(scOut.shiftEnd / 60);
-        const shiftEndMinute = scOut.shiftEnd % 60;
-
-        const shiftEnd = now
-            .clone()
-            .hour(shiftEndHour)
-            .minute(shiftEndMinute)
-            .second(0);
-
-        const overtimeMinutes = Math.max(0, now.diff(shiftEnd, "minutes"));
-        const overtime = parseFloat((overtimeMinutes / 60).toFixed(2));
-
-        // ─────────────────────────────────────────────
-        // HALF DAY / SHORT LEAVE LOGIC
-        // ─────────────────────────────────────────────
-        const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-        const rawNowDate = now.toDate();
-        const nowIST = new Date(rawNowDate.getTime() + IST_OFFSET_MS);
-        const punchOutMinutes = nowIST.getUTCHours() * 60 + nowIST.getUTCMinutes();
-
-        const alreadyHalfDay = attendance.isHalfDay;
-
-        const earlyExit = punchOutMinutes < scOut.shiftEnd;
-        const shortHours = roundedWorkHours < MIN_WORK_HOURS;
-
-        // FIX #6: use integer minutes to avoid floating point boundary errors
-        const totalWorkedMinutes = Math.round(workHours * 60);
-        const withinGrace = totalWorkedMinutes >= (MIN_WORK_HOURS * 60 - GRACE_MINUTES_BEFORE_SHIFT_END);
-
-        // Rule 2: Monthly 8-hour pass — once per month if >= 8 hrs
-        const monthStartForPass = now.clone().startOf("month").toDate();
-        const monthEndForPass = now.clone().endOf("month").toDate();
-
-        const eightHourPassUsedCount = await Attendance.countDocuments({
-            user: userId,
-            date: { $gte: monthStartForPass, $lte: monthEndForPass },
-            eightHourPassUsed: true,
+        const evalResult = await evaluateAttendance({
+            userId,
+            attendanceId: attendance._id,
+            punchIn: attendance.punchIn,
+            punchOut: nowDate,
+            isHalfDayLeaveOverride
         });
 
-        const qualifiesFor8HrPass =
-            eightHourPassUsedCount < MONTHLY_8HR_PASS_LIMIT &&
-            roundedWorkHours >= LENIENCY_WORK_HOURS;
+        const workHours = evalResult.workHours;
+        const roundedWorkHours = evalResult.workHours;
+        const overtime = evalResult.overtime;
 
-        // ── Short leave check (default shift only: 10:00–19:00) ──────────────
-        // Qualifies if punch-out falls strictly between 17:59 and 18:45
-        const isInShortLeaveWindow =
-            scOut.isDefaultShift &&
-            punchOutMinutes > SHORT_LEAVE_WINDOW_OPEN &&
-            punchOutMinutes < SHORT_LEAVE_WINDOW_CLOSE;
-
-        let halfDayReason = "";
-        let usedGrace = false;
-        let used8HrPass = false;
         let usedShortLeave = false;
+        let used8HrPass = false;
+        let halfDayReason = evalResult.halfDayReason;
 
-        if (!alreadyHalfDay && shortHours) {
-            if (withinGrace || shiftCompleted) {
-                usedGrace = true;
-            } else if (isInShortLeaveWindow) {
-                // ── SHORT LEAVE BRANCH ──────────────────────────────────────
-                // Check if user has short leave quota remaining this month
-                const userForSL = await User.findById(userId)
-                    .select("leaveBalance name email");
-
-                const nowMonth = now.month() + 1; // moment months are 0-indexed
-                const nowYear = now.year();
-
-                const sl = userForSL.leaveBalance?.shortLeave || {};
-                const slGrantedMonth = sl.lastGrantedMonth || nowMonth;
-                const slGrantedYear = sl.lastGrantedYear || nowYear;
-
-                // Reset used count if we're in a new month
-                const isNewMonth =
-                    slGrantedYear < nowYear ||
-                    (slGrantedYear === nowYear && slGrantedMonth < nowMonth);
-
-                const slUsedThisMonth = isNewMonth ? 0 : (sl.used || 0);
-                const slTotalThisMonth = 1; // always 1 per month
-
-                if (slUsedThisMonth < slTotalThisMonth) {
-                    // Short leave quota available — mark as short-leave (not half-day)
-                    usedShortLeave = true;
-                    attendance.isShortLeave = true;
-                    attendance.status = "short-leave";
-
-                    // Deduct short leave quota
-                    await User.findByIdAndUpdate(userId, {
-                        "leaveBalance.shortLeave.used": slUsedThisMonth + 1,
-                        "leaveBalance.shortLeave.lastGrantedMonth": nowMonth,
-                        "leaveBalance.shortLeave.lastGrantedYear": nowYear,
-                    });
-
-                    User.findById(userId).select("email name").then(employee => {
-                        if (!employee) return;
-                        sendMail({
-                            to: employee.email,
-                            subject: "🕐 Short Leave Marked",
-                            html: `
-                                <p>Hi ${employee.name},</p>
-                                <p>Your punch-out at <b>${formatTime(nowDate)}</b> has been recorded as a <b>Short Leave</b>.</p>
-                                <p>Hours Worked: <b>${roundedWorkHours} hrs</b></p>
-                                <p>⚠️ Your monthly short leave quota (1/month) has been consumed. It will reset next month.</p>
-                            `,
-                        }).catch(err => console.error("Email error (shortLeave):", err));
-                    }).catch(err => console.error("User fetch error (shortLeave):", err));
-
-                } else {
-                    // Short leave quota exhausted — fall back to half day
-                    attendance.isHalfDay = true;
-                    attendance.status = "half-day";
-                    halfDayReason = `Early exit at ${formatTime(nowDate)} — short leave quota exhausted for this month`;
-
-                    User.findById(userId).select("email name").then(employee => {
-                        if (!employee) return;
-                        sendMail({
-                            to: employee.email,
-                            subject: "⚠️ Half Day Marked (Short Leave Quota Exhausted)",
-                            html: `
-                                <p>Hi ${employee.name},</p>
-                                <p>Your attendance has been marked as <b>Half Day</b>.</p>
-                                <p>Reason: <b>${halfDayReason}</b></p>
-                                <p>Punch Out: <b>${formatTime(nowDate)}</b> · Hours Worked: <b>${roundedWorkHours} hrs</b></p>
-                            `,
-                        }).catch(err => console.error("Email error (punchOut):", err));
-                    }).catch(err => console.error("User fetch error (punchOut):", err));
-                }
-
-            } else if (qualifiesFor8HrPass) {
-                // Monthly 8-hour pass applied
-                used8HrPass = true;
-            } else {
-                // No leniency — mark half day
-                attendance.isHalfDay = true;
-                attendance.status = "half-day";
-
-                if (earlyExit && shortHours) {
-                    halfDayReason = `Early exit at ${formatTime(nowDate)} and worked only ${roundedWorkHours} hrs (min ${MIN_WORK_HOURS} hrs required)`;
-                } else {
-                    halfDayReason = `Worked only ${roundedWorkHours} hrs (minimum ${MIN_WORK_HOURS} hrs required)`;
-                }
-
-                User.findById(userId).select("email name").then(employee => {
-                    if (!employee) return;
-                    sendMail({
-                        to: employee.email,
-                        subject: "⚠️ Half Day Marked",
-                        html: `
-                    <p>Hi ${employee.name},</p>
-                    <p>Your attendance has been marked as <b>Half Day</b>.</p>
-                    <p>Reason: <b>${halfDayReason}</b></p>
-                    <p>Punch Out: <b>${formatTime(nowDate)}</b> · Hours Worked: <b>${roundedWorkHours} hrs</b></p>
-                `,
-                    }).catch(err => console.error("Email error (punchOut):", err));
-                }).catch(err => console.error("User fetch error (punchOut):", err));
-            }
+        if (!attendance.isShortLeave && evalResult.isShortLeave) {
+            usedShortLeave = true;
+            await updateShortLeaveBalance(userId, nowDate, "deduct");
+            User.findById(userId).select("email name").then(employee => {
+                if (!employee) return;
+                sendMail({
+                    to: employee.email,
+                    subject: "🕐 Short Leave Marked",
+                    html: `<p>Hi ${employee.name},</p><p>Your punch-out at <b>${formatTime(nowDate)}</b> has been recorded as a <b>Short Leave</b>.</p><p>Hours Worked: <b>${roundedWorkHours} hrs</b></p><p>⚠️ Your monthly short leave quota (1/month) has been consumed. It will reset next month.</p>`,
+                }).catch(err => console.error(err));
+            }).catch(err => console.error(err));
         }
 
-        // Save pass flag on attendance record
-        if (used8HrPass) {
-            attendance.eightHourPassUsed = true;
+        if (!attendance.isHalfDay && evalResult.isHalfDay && !evalResult.isShortLeave) {
+            User.findById(userId).select("email name").then(employee => {
+                if (!employee) return;
+                sendMail({
+                    to: employee.email,
+                    subject: "⚠️ Half Day Marked",
+                    html: `<p>Hi ${employee.name},</p><p>Your attendance has been marked as <b>Half Day</b>.</p><p>Reason: <b>${halfDayReason || "Incomplete work hours"}</b></p><p>Punch Out: <b>${formatTime(nowDate)}</b> · Hours Worked: <b>${roundedWorkHours} hrs</b></p>`,
+                }).catch(err => console.error(err));
+            }).catch(err => console.error(err));
         }
-        // ─────────────────────────────────────────────
-        // SAVE
-        // ─────────────────────────────────────────────
+
+        if (!attendance.eightHourPassUsed && evalResult.eightHourPassUsed) used8HrPass = true;
+
+        attendance.isLate = evalResult.isLate;
+        attendance.isHalfDay = evalResult.isHalfDay;
+        attendance.status = evalResult.status;
+        attendance.lateMinutes = evalResult.lateMinutes;
+        attendance.isShortLeave = evalResult.isShortLeave;
+        attendance.eightHourPassUsed = evalResult.eightHourPassUsed;
+
         attendance.punchOut = nowDate;
-
         attendance.workHours = workHours;
-
         attendance.overtime = overtime;
-
-        attendance.isOfflinePunch =
-            !!isOfflinePunch;
-
-        if (isOfflinePunch) {
-            attendance.syncedAt = serverNow.toDate();
-        }
+        attendance.isOfflinePunch = !!isOfflinePunch;
+        if (isOfflinePunch) attendance.syncedAt = serverNow.toDate();
 
         await attendance.save();
 
-        // ─────────────────────────────────────────────
-        // 8-HOUR PASS NOTIFICATION
-        // ─────────────────────────────────────────────
         if (used8HrPass) {
             User.findById(userId).select("email name").then(employee => {
                 if (!employee) return;
                 sendMail({
                     to: employee.email,
                     subject: "✅ Full Day Marked (Monthly 8-Hour Pass Used)",
-                    html: `
-                <p>Hi ${employee.name},</p>
-                <p>You worked <b>${roundedWorkHours} hrs</b> today (punched out at <b>${formatTime(nowDate)}</b>).</p>
-                <p>Your attendance has been marked as <b>Full Day</b> using your monthly 8-hour pass.</p>
-                <p>⚠️ This pass has been used for this month and will reset next month.</p>
-            `,
-                }).catch(err => console.error("Email error (8hr pass):", err));
-            }).catch(err => console.error("User fetch error (8hr pass):", err));
+                    html: `<p>Hi ${employee.name},</p><p>You worked <b>${roundedWorkHours} hrs</b> today (punched out at <b>${formatTime(nowDate)}</b>).</p><p>Your attendance has been marked as <b>Full Day</b> using your monthly 8-hour pass.</p><p>⚠️ This pass has been used for this month and will reset next month.</p>`,
+                }).catch(err => console.error(err));
+            }).catch(err => console.error(err));
         }
 
-        // ─────────────────────────────────────────────
-        // NOTIFICATIONS
-        // ─────────────────────────────────────────────
         const io = req.app.get("io");
+        io.to(`user_${userId}`).emit("tracker:stop", { attendanceId: attendance._id, timestamp: new Date() });
 
-        // ─────────────────────────────────────────────
-        // STOP DESKTOP TRACKER
-        // ─────────────────────────────────────────────
-
-        io.to(`user_${userId}`).emit(
-            "tracker:stop",
-            {
-                attendanceId: attendance._id,
-                timestamp: new Date(),
-            }
-        );
-
-        const employeeName =
-            req.user.name || "An employee";
-
-        const punchTime =
-            formatTime(nowDate);
-
+        const employeeName = req.user.name || "An employee";
+        const punchTime = formatTime(nowDate);
         const hrs = Math.floor(workHours);
+        const mins = Math.round((workHours - hrs) * 60);
+        const workLabel = `${hrs}h ${mins}m worked`;
+        const overtimeLabel = overtime > 0 ? ` · OT: ${Math.floor(overtime)}h ${Math.round((overtime % 1) * 60)}m` : "";
+        const halfDayLabel = attendance.isShortLeave ? ` · 🕐 Short Leave` : attendance.isHalfDay ? ` · ⚠️ Half Day` : "";
 
-        const mins = Math.round(
-            (workHours - hrs) * 60
-        );
-
-        const workLabel =
-            `${hrs}h ${mins}m worked`;
-
-        const overtimeLabel =
-            overtime > 0
-                ? ` · OT: ${Math.floor(overtime)}h ${Math.round((overtime % 1) * 60)}m`
-                : "";
-
-        const halfDayLabel =
-            attendance.isShortLeave
-                ? ` · 🕐 Short Leave`
-                : attendance.isHalfDay
-                    ? ` · ⚠️ Half Day`
-                    : "";
-
-        // ─────────────────────────────────────────────
-        // HR / TL / MANAGER NOTIFICATIONS ONLY
-        // ─────────────────────────────────────────────
-        const employeeDoc = await User.findById(userId)
-            .select("reportingTo")
-            .lean();
-
+        const employeeDoc = await User.findById(userId).select("reportingTo").lean();
         const notifyUsersRaw = await User.find({
-            $or: [
-                { role: { $in: ["hr", "manager", "admin"] } },
-                ...(employeeDoc?.reportingTo ? [{ _id: employeeDoc.reportingTo }] : []),
-            ]
+            $or: [{ role: { $in: ["hr", "manager", "admin"] } }, ...(employeeDoc?.reportingTo ? [{ _id: employeeDoc.reportingTo }] : [])]
         }).select("_id");
-
-        // Deduplicate
         const notifyIdSet = new Set();
         for (const u of notifyUsersRaw) {
             const sid = u._id.toString();
             if (sid !== userId.toString()) notifyIdSet.add(sid);
         }
 
-        await Promise.allSettled(
-            [...notifyIdSet].map(sid =>
-                createNotification(
-                    io,
-                    sid,
-                    `${employeeName} Punched Out`,
-                    `Punched out at ${punchTime} — ${workLabel}${overtimeLabel}${halfDayLabel}`,
-                    "attendance",
-                    {
-                        userId,
-                        attendanceId: attendance._id,
-                        workHours,
-                        overtime,
-                        isHalfDay: attendance.isHalfDay,
-                    }
-                )
-            )
-        );
+        await Promise.allSettled([...notifyIdSet].map(sid => createNotification(io, sid, `${employeeName} Punched Out`, `Punched out at ${punchTime} — ${workLabel}${overtimeLabel}${halfDayLabel}`, "attendance", { userId, attendanceId: attendance._id, workHours, overtime, isHalfDay: attendance.isHalfDay })));
 
-        // ─────────────────────────────────────────────
-        // SUCCESS RESPONSE
-        // ─────────────────────────────────────────────
-        res.status(200).json({
-            success: true,
-            message: "Punch-out successful",
-            attendance,
-        });
-
+        res.status(200).json({ success: true, message: "Punch-out successful", attendance });
     } catch (error) {
-
         console.error("PunchOut Error:", error);
-
-        res.status(500).json({
-            success: false,
-            message: error.message,
-        });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
-
 
 // ─────────────────────────────────────────────
 //  GET TODAY'S ATTENDANCE
 // ─────────────────────────────────────────────
 const getTodayAttendance = async (req, res) => {
     try {
-        const userId = req.user._id;
-
-        //  IST — matches how punchIn saves the date
-        const nowIST = moment().tz("Asia/Kolkata");
-        const todayString = nowIST.clone().format("YYYY-MM-DD");
-        const todayEnd = nowIST.clone().endOf("day").toDate();
-
+        const todayString = moment().tz("Asia/Kolkata").format("YYYY-MM-DD");
         const attendance = await Attendance.findOne({
-            user: userId,
-            dateString: todayString,
+            user: req.user._id,
+            dateString: todayString
         });
 
-        const monthStart = nowIST.clone().startOf("month").toDate();
-        const monthEnd = nowIST.clone().endOf("month").toDate();
-
-        const lateQuotaUsed = await Attendance.countDocuments({
-            user: userId,
-            date: { $gte: monthStart, $lte: monthEnd },
-            isLate: true,
-        });
-
-        const userForShift = await User.findById(userId).select("shift").lean();
-        const scForShift = getShiftConfig(userForShift?.shift);
+        const user = await User.findById(req.user._id).select("shift").lean();
+        const sc = getShiftConfig(user?.shift);
 
         res.status(200).json({
             success: true,
             attendance,
-            lateQuotaUsed,
-            lateQuotaMax: MONTHLY_LATE_QUOTA,
-            shiftEnd: scForShift.shiftEnd,
+            shiftEnd: sc.shiftEnd
         });
-
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: error.message,
-        });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
-
 
 // ─────────────────────────────────────────────
 //  GET MONTHLY ATTENDANCE
 // ─────────────────────────────────────────────
-
 const getMonthlyAttendance = async (req, res) => {
     try {
-        const { month, year, userId: queryUserId } = req.query;
+        const { month, year, userId: targetId } = req.query;
+        const isAdmin = ["hr", "manager", "superadmin"].includes(req.user.role);
+        const userId = (targetId && isAdmin) ? targetId : req.user._id;
 
-        if (!month || !year) {
-            return res.status(400).json({
-                success: false,
-                message: "month and year are required",
-            });
+        if (targetId && targetId.toString() !== req.user._id.toString() && !isAdmin) {
+            return res.status(403).json({ success: false, message: "Unauthorized to view other's attendance" });
         }
 
-        // Cross-user access: only manager / hr may pass a userId
-        let targetUserId = req.user._id;
-        if (queryUserId && queryUserId !== req.user._id.toString()) {
-            const allowedRoles = ["manager", "hr"];
-            if (!allowedRoles.includes(req.user.role)) {
-                return res.status(403).json({
-                    success: false,
-                    message: "Access denied — cannot view another user's attendance",
-                });
-            }
+        const m = parseInt(month);
+        const y = parseInt(year);
+        const startOfMonth = moment.tz(`${y}-${String(m).padStart(2, "0")}-01`, "Asia/Kolkata").startOf("month").toDate();
+        const endOfMonth = moment(startOfMonth).endOf("month").toDate();
 
-            // HR may only view employee / tl records
-            if (req.user.role === "hr") {
-                const targetUser = await User.findById(queryUserId).select("role").lean();
-                if (!targetUser) {
-                    return res.status(404).json({ success: false, message: "User not found" });
-                }
-                if (!["employee", "tl"].includes(targetUser.role)) {
-                    return res.status(403).json({
-                        success: false,
-                        message: "HR can only view attendance for employees and TLs",
-                    });
-                }
-            }
+        const data = await attendanceService.getAttendanceGrid(userId, startOfMonth, endOfMonth);
+        const summary = attendanceService.calculateStats(data);
 
-            targetUserId = queryUserId;
-        }
-
-        // ✅ Get user joining date
-        const user = await User.findById(targetUserId).select("joiningDate createdAt");
-
-        const rawJoining = user?.joiningDate ? new Date(user.joiningDate) : null;
-        const rawCreated = user?.createdAt ? new Date(user.createdAt) : null;
-        const effectiveStart = rawJoining && rawCreated
-            ? new Date(Math.max(rawJoining.getTime(), rawCreated.getTime()))
-            : rawJoining || rawCreated || null;
-        const joiningDate = effectiveStart
-            ? moment.tz(effectiveStart, "Asia/Kolkata").startOf("day").toDate()
-            : null;
-
-        const start = moment.tz(`${year}-${String(month).padStart(2, '0')}-01`, "Asia/Kolkata").startOf("month").toDate();
-        const end = moment.tz(`${year}-${String(month).padStart(2, '0')}-01`, "Asia/Kolkata").endOf("month").toDate();
-
-        const monthStr = `${year}-${String(month).padStart(2, "0")}`;
-
-        const records = await Attendance.find({
-            user: targetUserId,
-            dateString: { $regex: `^${monthStr}` },
-        }).sort({ dateString: 1 });
-
-        // ✅ Get holidays
-        const holidays = await Holiday.find({
-            date: { $gte: start, $lte: end },
-        });
-
-        // Get approved leaves for this user in this month
-        const approvedLeaves = await Leave.findOne({
-            user: targetUserId,
-            status: "approved",
-            fromDate: { $lte: end },
-            toDate: { $gte: start },
-        });
-
-        // Maps
-        const recordMap = {};
-        records.forEach(r => {
-            if (r.dateString) {
-                const day = parseInt(r.dateString.split("-")[2], 10);
-                recordMap[day] = r;
-            } else {
-                const day = parseInt(
-                    moment(r.date).tz("Asia/Kolkata").format("DD"), 10
-                );
-                recordMap[day] = r;
-            }
-        });
-
-        const holidayMap = {};
-        holidays.forEach(h => {
-            const day = parseInt(
-                moment(h.date).tz("Asia/Kolkata").format("DD"), 10
-            );
-            holidayMap[day] = h;
-        });
-
-        const daysInMonth = new Date(year, month, 0).getDate();
-        const fullData = [];
-
-        for (let i = 1; i <= daysInMonth; i++) {
-            const currentDate = moment.tz(
-                `${year}-${String(month).padStart(2, "0")}-${String(i).padStart(2, "0")}`,
-                "Asia/Kolkata"
-            ).startOf("day").toDate();
-            
-            if (joiningDate && currentDate < joiningDate) {
-                continue;
-            }
-
-            // ✅ Priority logic
-            if (recordMap[i]) {
-                fullData.push(recordMap[i]);
-            }
-            else if (holidayMap[i]) {
-                fullData.push({
-                    _id: `holiday-${i}`,
-                    date: currentDate,
-                    status: "holiday",
-                });
-            }
-            else if (isWeekend(currentDate)) {
-                fullData.push({
-                    _id: `weekend-${i}`,
-                    date: currentDate,
-                    status: "weekend",
-                });
-            }
-            else {
-                const currentDateStr = moment.tz(
-                    `${year}-${String(month).padStart(2, "0")}-${String(i).padStart(2, "0")}`,
-                    "Asia/Kolkata"
-                ).format("YYYY-MM-DD");
-                
-                const todayStr = moment().tz("Asia/Kolkata").format("YYYY-MM-DD");
-                const isFuture = currentDateStr > todayStr;
-                
-                if (isFuture) {
-                    continue;
-                }
-
-                // ── Check if this day falls within an approved leave ──
-                const onLeave = await Leave.findOne({
-                    user: targetUserId,
-                    status: "approved",
-                    fromDate: { $lte: moment.tz(currentDateStr, "Asia/Kolkata").endOf("day").toDate() },
-                    toDate: { $gte: moment.tz(currentDateStr, "Asia/Kolkata").startOf("day").toDate() },
-                });
-
-                if (onLeave) {
-                    fullData.push({
-                        _id: `leave-${i}`,
-                        date: currentDate,
-                        status: "leave",
-                        leaveType: onLeave.type,
-                        punchIn: null,
-                        punchOut: null,
-                        workHours: 0,
-                        isLate: false,
-                        isHalfDay: false,
-                    });
-                } else {
-                    fullData.push({
-                        _id: `absent-${i}`,
-                        date: currentDate,
-                        status: "absent",
-                        punchIn: null,
-                        punchOut: null,
-                        workHours: 0,
-                        isLate: false,
-                        isHalfDay: false,
-                    });
-                }
-            }
-        }
-
-        const lateQuotaUsed = records.filter(a => a.isLate).length;
-
-        const totalWorkHours = parseFloat(
-            records.reduce((sum, r) => sum + (r.workHours || 0), 0).toFixed(2)
-        );
-        const totalLateMinutes = Math.round(
-            records
-                .filter(r => r.isLate)
-                .reduce((sum, r) => sum + (r.lateMinutes || 0), 0)
-        );
-        const workedDays = records.filter(r => r.workHours > 0).length;
-        const avgDailyHours = workedDays
-            ? parseFloat((totalWorkHours / workedDays).toFixed(2))
-            : 0;
-
-        res.json({
-            success: true,
-            lateQuotaUsed,
-            lateQuotaMax: MONTHLY_LATE_QUOTA,
-            count: fullData.length,
-            data: fullData,
-            summary: {
-                totalWorkHours,
-                totalLateMinutes,
-                avgDailyHours,
-                workedDays,
-            },
-        });
-
+        res.status(200).json({ success: true, data, summary });
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: error.message,
-        });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
-
-
 // ─────────────────────────────────────────────
-//  GET WEEKLY ATTENDANCE SUMMARY (HR dashboard)
+//  GET WEEKLY ATTENDANCE SUMMARY
 // ─────────────────────────────────────────────
 const getWeeklyAttendanceSummary = async (req, res) => {
     try {
-        const nowIST = moment().tz("Asia/Kolkata");
-        const day = nowIST.day(); // 0=Sun
-        const diff = day === 0 ? -6 : 1 - day;
+        const start = moment().tz("Asia/Kolkata").subtract(7, "days").startOf("day").toDate();
 
-        const mon = nowIST.clone().add(diff, "days").startOf("day");
+        const validUsers = await User.find({ role: { $nin: ["superadmin", "manager"] } }).select("_id").lean();
+        const validIds = validUsers.map(u => u._id);
 
-        const totalEmployees = await User.countDocuments({
-            role: { $in: ["employee", "tl", "manager"] },
-            status: "active",
-        });
-
-        const days = ["Mon", "Tue", "Wed", "Thu", "Fri"];
-        const result = [];
-
-        for (let i = 0; i < 5; i++) {
-            const dayMoment = mon.clone().add(i, "days");
-            const dateStr = dayMoment.format("YYYY-MM-DD");
-
-            const present = await Attendance.countDocuments({
-                dateString: dateStr,
-                status: { $in: ["present", "half-day"] },
-            });
-
-            result.push({
-                day: days[i],
-                date: dateStr,
-                present,
-                absent: Math.max(0, totalEmployees - present),
-            });
-        }
-
-        res.json({ success: true, data: result });
-
-    } catch (err) {
-        res.status(500).json({ success: false, message: err.message });
-    }
-};
-
-
-
-
-const getTeamAttendance = async (req, res) => {
-    try {
-        const tlId = req.user._id;
-        const { month, year, view = "daily", date } = req.query;
-
-        if (!month || !year) {
-            return res.status(400).json({ success: false, message: "month and year are required" });
-        }
-
-        // Get all employees under this TL
-        const teamMembers = await User.find({ reportingTo: tlId })
-            .select("name employeeId department designation avatar status joiningDate createdAt shift");
-
-        if (!teamMembers.length) {
-            return res.json({ success: true, data: [], teamMembers: [], message: "No team members assigned" });
-        }
-
-        const teamIds = teamMembers.map(m => m._id);
-
-        const start = moment.tz(`${year}-${String(month).padStart(2, '0')}-01`, "Asia/Kolkata").startOf("month").toDate();
-        const end = moment.tz(`${year}-${String(month).padStart(2, '0')}-01`, "Asia/Kolkata").endOf("month").toDate();
-
-        // Get all attendance records for team this month
-        const records = await Attendance.find({
-            user: { $in: teamIds },
-            date: { $gte: start, $lte: end },
-        }).populate("user", "name employeeId department designation").sort({ date: 1 });
-
-        // Get holidays this month
-        const holidays = await Holiday.find({ date: { $gte: start, $lte: end } });
-        const holidayDates = new Set(holidays.map(h => moment(h.date).tz("Asia/Kolkata").date()));
-
-        // Get leaves for team this month
-        const leaves = await Leave.find({
-            user: { $in: teamIds },
-            status: "approved",
-            fromDate: { $lte: end },
-            toDate: { $gte: start },
-        }).populate("user", "name employeeId");
-
-        // ── TODAY summary — use IST dateString for consistency ──────────
-        const actualNow = moment().tz("Asia/Kolkata");
-        let todayIST = actualNow.clone();
-        
-        if (date) {
-            todayIST = moment.tz(date, "YYYY-MM-DD", "Asia/Kolkata").startOf("day");
-        }
-        
-        const todayString = todayIST.format("YYYY-MM-DD");
-        const actualTodayString = actualNow.format("YYYY-MM-DD");
-
-        let nowMins;
-        if (todayIST.isBefore(actualNow, "day")) {
-            nowMins = 1440; // past date - day is over
-        } else if (todayIST.isAfter(actualNow, "day")) {
-            nowMins = 0; // future date - day hasn't started
-        } else {
-            // it is today
-            nowMins = actualNow.hour() * 60 + actualNow.minute();
-        }
-
-        const yesterdayString = todayIST.clone().subtract(1, "day").format("YYYY-MM-DD");
-
-        const todayRecords = await Attendance.find({
-            user: { $in: teamIds },
-            $or: [
-                { dateString: todayString },
-                { dateString: yesterdayString, punchOut: null }, // overnight / late-shift
-            ],
-        }).populate("user", "name employeeId department");
-
-        // Keep `today` as a JS Date for leave-range comparisons below
-        const today = todayIST.clone().startOf("day").toDate();
-        const todayEnd = todayIST.clone().endOf("day").toDate();
-
-        // Who is on leave today
-        const onLeaveToday = leaves.filter(l => {
-            const from = new Date(l.fromDate);
-            const to = new Date(l.toDate);
-            from.setHours(0, 0, 0, 0);
-            to.setHours(23, 59, 59, 999);
-            return today >= from && today <= to;
-        });
-
-        const onLeaveTodayIds = new Set(onLeaveToday.map(l => l.user._id.toString()));
-
-        // Build today summary per member
-        const todayRecordMap = {};
-        todayRecords.forEach(r => { todayRecordMap[r.user._id.toString()] = r; });
-
-        const todaySummary = teamMembers.map(member => {
-            const rec = todayRecordMap[member._id.toString()];
-            const onLeave = onLeaveTodayIds.has(member._id.toString());
-            const isHolidayToday = isWeekend(today) || holidayDates.has(moment(today).tz("Asia/Kolkata").date());
-
-            const empSc = getShiftConfig(member.shift);
-            const shiftNotStartedYet = nowMins < empSc.shiftStart;
-
-            let attendanceStatus;
-            
-            // PRIORITY RULE:
-            // 1. Present / Late / Half-day
-            // 2. Holiday
-            // 3. Weekend
-            // 4. Leave
-            // 5. Absent
-            
-            if (rec?.punchIn && rec?.punchOut) {
-                if (rec.isHalfDay) attendanceStatus = "half_day";
-                else if (rec.isLate) attendanceStatus = "late";
-                else attendanceStatus = "present";
-            } else if (rec?.punchIn) {
-                const shiftEndMins = empSc.shiftEnd === 0 ? 1440 : empSc.shiftEnd;
-                const punchInMoment = moment(rec.punchIn).tz("Asia/Kolkata");
-                const isPunchInFromYesterday = punchInMoment.format("YYYY-MM-DD") !== todayString;
-                const shiftOver = isPunchInFromYesterday || nowMins > shiftEndMins + 60;
-                
-                if (shiftOver) attendanceStatus = "missed_punchout";
-                else if (rec.isLate) attendanceStatus = "late";
-                else attendanceStatus = "present";
-            } else if (isHolidayToday && holidayDates.has(moment(today).tz("Asia/Kolkata").date())) {
-                attendanceStatus = "holiday";
-            } else if (isWeekend(today)) {
-                attendanceStatus = "weekend";
-            } else if (onLeave) {
-                attendanceStatus = "on_leave";
-            } else if (shiftNotStartedYet) {
-                attendanceStatus = "not_started";
-            } else {
-                attendanceStatus = "absent";
-            }
-
-            const shiftEndMins = empSc.shiftEnd === 0 ? 1440 : empSc.shiftEnd;
-
-            return {
-                _id: member._id,
-                name: member.name,
-                employeeId: member.employeeId,
-                department: member.department,
-                designation: member.designation,
-                status: member.status,
-                attendanceStatus,
-                shiftStartHour: Math.floor(empSc.shiftStart / 60),
-                shiftStartMinute: empSc.shiftStart % 60,
-                punchIn: rec?.punchIn || null,
-                punchOut: rec?.punchOut || null,
-                workHours: rec?.workHours || null,
-                isLate: rec?.isLate || false,
-                isHalfDay: rec?.isHalfDay || false,
-                lateMinutes: rec?.lateMinutes || 0,
-                missedPunchOut: (() => {
-                    const punchInMoment = rec?.punchIn ? moment(rec.punchIn).tz("Asia/Kolkata") : null;
-                    const punchInDateString = punchInMoment ? punchInMoment.format("YYYY-MM-DD") : null;
-                    const isPunchInFromYesterday = punchInDateString && punchInDateString !== todayString;
-                    return !!(
-                        rec?.punchIn &&
-                        !rec?.punchOut &&
-                        !onLeave &&
-                        (
-                            (!isPunchInFromYesterday && nowMins > shiftEndMins + 30) ||
-                            isPunchInFromYesterday
-                        )
-                    );
-                })(),
-                onLeave,
-            };
-        });
-
-        // ── Monthly grid per member ─────────────────────
-        const daysInMonth = new Date(year, month, 0).getDate();
-
-        // Group records by userId
-        const recordsByUser = {};
-        records.forEach(r => {
-            const uid = r.user._id.toString();
-            if (!recordsByUser[uid]) recordsByUser[uid] = {};
-            recordsByUser[uid][new Date(r.date).getDate()] = r;
-        });
-
-        const monthlyGrid = teamMembers.map(member => {
-            const uid = member._id.toString();
-            const memberRecords = recordsByUser[uid] || {};
-            const memberLeaves = leaves.filter(l => l.user._id.toString() === uid);
-
-            let presentDays = 0, absentDays = 0, halfDays = 0, lateDays = 0, leaveDays = 0;
-
-            const days = [];
-            for (let d = 1; d <= daysInMonth; d++) {
-                const currentDate = new Date(year, month - 1, d);
-                const rawJoining = member.joiningDate ? new Date(member.joiningDate) : null;
-                const rawCreated = member.createdAt ? new Date(member.createdAt) : null;
-                const effectiveJoining = rawJoining && rawCreated
-                    ? new Date(Math.max(rawJoining.getTime(), rawCreated.getTime()))
-                    : rawJoining || rawCreated || null;
-                const joiningDate = effectiveJoining
-                    ? new Date(new Date(effectiveJoining).setHours(0, 0, 0, 0))
-                    : null;
-
-                if (joiningDate && currentDate < joiningDate) {
-                    days.push({ day: d, status: "not_joined" });
-                    continue; // ✅ skip — don't count as absent
-                }
-
-                const rec = memberRecords[d];
-                const isHoliday = holidayDates.has(d);
-                // FIX #15: construct date in IST before checking weekend to avoid UTC server timezone shift
-                const currentDateIST = moment.tz(
-                    `${year}-${String(month).padStart(2, "0")}-${String(d).padStart(2, "0")}`,
-                    "Asia/Kolkata"
-                );
-                const weekend = currentDateIST.day() === 0 || currentDateIST.day() === 6;
-                const currentDateStr = moment.tz(
-                    `${year}-${String(month).padStart(2, "0")}-${String(d).padStart(2, "0")}`,
-                    "Asia/Kolkata"
-                ).format("YYYY-MM-DD");
-                const todayStr = moment().tz("Asia/Kolkata").format("YYYY-MM-DD");
-                const isFuture = currentDateStr > todayStr;
-
-                const onLeave = memberLeaves.some(l => {
-                    const from = new Date(l.fromDate); from.setHours(0, 0, 0, 0);
-                    const to = new Date(l.toDate); to.setHours(23, 59, 59, 999);
-                    return currentDate >= from && currentDate <= to;
-                });
-
-                let dayStatus = "absent";
-                if (isFuture) dayStatus = "future";
-                else if (rec) {
-                    if (rec.isHalfDay) { dayStatus = "half_day"; halfDays++; presentDays++; }
-                    else if (rec.isLate) { dayStatus = "late"; lateDays++; presentDays++; }
-                    else if (rec.status === "present") { dayStatus = "present"; presentDays++; }
-                    else { dayStatus = "absent"; absentDays++; }
-                }
-                else if (isHoliday) dayStatus = "holiday";
-                else if (weekend) dayStatus = "weekend";
-                else if (onLeave) { dayStatus = "on_leave"; leaveDays++; }
-                else {
-                    dayStatus = "absent";
-                    absentDays++;
-                }
-
-                days.push({ day: d, status: dayStatus, punchIn: rec?.punchIn, punchOut: rec?.punchOut });
-            }
-
-            return {
-                _id: member._id,
-                name: member.name,
-                employeeId: member.employeeId,
-                department: member.department,
-                designation: member.designation,
-                stats: { presentDays, absentDays, halfDays, lateDays, leaveDays },
-                days,
-            };
-        });
-
-        res.json({
-            success: true,
-            todaySummary,
-            monthlyGrid,
-            teamMembers,
-            holidays: holidays.map(h => ({ date: h.date, name: h.name })),
-            month: Number(month),
-            year: Number(year),
-        });
-
+        const data = await Attendance.aggregate([
+            { $match: { date: { $gte: start }, user: { $in: validIds } } },
+            { $group: { _id: "$status", count: { $sum: 1 } } }
+        ]);
+        res.status(200).json({ success: true, data });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
+// ─────────────────────────────────────────────
+//  GET TEAM ATTENDANCE (TL)
+// ─────────────────────────────────────────────
+const getTeamAttendance = async (req, res) => {
+    try {
+        const { month, year, date } = req.query;
+        const nowIST = moment().tz("Asia/Kolkata");
+
+        const todayStr = date || nowIST.format("YYYY-MM-DD");
+        const todayStart = moment.tz(todayStr, "Asia/Kolkata").startOf("day").toDate();
+        const todayEnd = moment.tz(todayStr, "Asia/Kolkata").endOf("day").toDate();
+
+        const m = parseInt(month) || (nowIST.month() + 1);
+        const y = parseInt(year) || nowIST.year();
+        const startOfMonth = moment.tz(`${y}-${String(m).padStart(2, "0")}-01`, "Asia/Kolkata").startOf("month");
+        const endOfMonth = moment(startOfMonth).endOf("month");
+
+        const teamMembers = await User.find({
+            reportingTo: req.user._id,
+            status: "active"
+        }).select("_id name employeeId department designation joiningDate createdAt shift").lean();
+        const teamIds = teamMembers.map(m => m._id.toString());
+
+        if (teamIds.length === 0) {
+            return res.status(200).json({ success: true, todaySummary: [], teamMembers: [], monthlyGrid: [] });
+        }
+
+        const [attendanceToday, leavesToday, todayHolidays] = await Promise.all([
+            Attendance.find({ user: { $in: teamIds }, dateString: todayStr }).lean(),
+            Leave.find({ user: { $in: teamIds }, status: "approved", fromDate: { $lte: todayEnd }, toDate: { $gte: todayStart } }).lean(),
+            Holiday.findOne({ date: { $gte: todayStart, $lte: todayEnd } }).lean()
+        ]);
+
+        const attMap = new Map(attendanceToday.map(a => [a.user.toString(), a]));
+        const leaveMap = new Map(leavesToday.map(l => [l.user.toString(), l]));
+
+        const todaySummary = teamMembers.map(u => {
+            const att = attMap.get(u._id.toString());
+            const leave = leaveMap.get(u._id.toString());
+            const isWeekend = moment(todayStart).day() === 0 || moment(todayStart).day() === 6;
+            const isFuture = moment(todayStart).isAfter(nowIST, "day");
+            const joiningDate = u.joiningDate || u.createdAt;
+            const isJoined = joiningDate ? moment(todayStart).isSameOrAfter(moment(joiningDate).tz("Asia/Kolkata").startOf("day")) : true;
+
+            let attendanceStatus = "absent";
+            if (!isJoined) attendanceStatus = "not_joined";
+            else if (leave) attendanceStatus = "on_leave";
+            else if (todayHolidays) attendanceStatus = "holiday";
+            else if (isWeekend) attendanceStatus = "weekend";
+            else if (att) {
+                attendanceStatus = att.punchOut ? "punched_out" : "punched_in";
+            } else if (isFuture) {
+                attendanceStatus = "future";
+            }
+
+            return {
+                ...u,
+                punchIn: att?.punchIn,
+                punchOut: att?.punchOut,
+                workHours: att?.workHours,
+                attendanceStatus,
+                onLeave: !!leave,
+                isLate: att?.isLate,
+                isHalfDay: att?.isHalfDay,
+                missedPunchOut: att?.missedPunchOut
+            };
+        });
+
+        // Monthly Grid Calculation using centralized service
+        const monthlyGrid = await Promise.all(teamMembers.map(async (u) => {
+            const grid = await attendanceService.getAttendanceGrid(u._id, startOfMonth.toDate(), endOfMonth.toDate());
+            const stats = attendanceService.calculateStats(grid);
+            return {
+                ...u,
+                days: grid,
+                stats
+            };
+        }));
+
+        res.status(200).json({ success: true, todaySummary, teamMembers, monthlyGrid });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 // ─────────────────────────────────────────────
-//  GET ALL EMPLOYEES ATTENDANCE OVERVIEW — HR
-//  GET /attendance/hr-overview?month=5&year=2026
+//  GET HR ATTENDANCE OVERVIEW
 // ─────────────────────────────────────────────
 const getHRAttendanceOverview = async (req, res) => {
     try {
-        const { month, year } = req.query;
+        const { date, month, year } = req.query;
+        const nowIST = moment().tz("Asia/Kolkata");
+        const todayStr = date || nowIST.format("YYYY-MM-DD");
+        const todayStart = moment.tz(todayStr, "Asia/Kolkata").startOf("day").toDate();
+        const todayEnd = moment.tz(todayStr, "Asia/Kolkata").endOf("day").toDate();
 
-        if (!month || !year) {
-            return res.status(400).json({ success: false, message: "month and year are required" });
-        }
+        const m = parseInt(month) || (nowIST.month() + 1);
+        const y = parseInt(year) || nowIST.year();
+        const monthStart = moment.tz(`${y}-${m}-01`, "YYYY-MM-DD", "Asia/Kolkata").startOf("month").toDate();
+        const monthEnd = moment.tz(`${y}-${m}-01`, "YYYY-MM-DD", "Asia/Kolkata").endOf("month").toDate();
 
-        const start = moment.tz(`${year}-${String(month).padStart(2, '0')}-01`, "Asia/Kolkata").startOf("month").toDate();
-        const end = moment.tz(`${year}-${String(month).padStart(2, '0')}-01`, "Asia/Kolkata").endOf("month").toDate();
-
-        // All active employees + tl + managers
-        // FIX #8: added "manager" to role filter — was silently excluded before
-        const callerRole = req.user.role;
-        const visibleRoles =
-            callerRole === "manager"
-                ? ["employee", "tl", "hr"]
-                : ["employee", "tl"]; // hr (and any other caller)
-
-        const allEmployees = await User.find({
-            role: { $in: visibleRoles },
+        const users = await User.find({
             status: "active",
-        }).select("name employeeId department designation role joiningDate reportingTo shift");
+            role: { $nin: ["superadmin", "manager"] }
+        }).select("name employeeId department designation joiningDate shift").lean();
+        const validUserIds = users.map(u => u._id);
 
-        const allIds = allEmployees.map(e => e._id);
+        const [attendanceToday, leavesToday, monthlyAttendance, monthlyLeaves] = await Promise.all([
+            Attendance.find({ user: { $in: validUserIds }, dateString: todayStr }).lean(),
+            Leave.find({ user: { $in: validUserIds }, status: "approved", fromDate: { $lte: todayEnd }, toDate: { $gte: todayStart } }).populate("user", "name").lean(),
+            Attendance.find({ user: { $in: validUserIds }, date: { $gte: monthStart, $lte: monthEnd } }).lean(),
+            Leave.find({ user: { $in: validUserIds }, status: "approved", fromDate: { $lte: monthEnd }, toDate: { $gte: monthStart } }).lean()
+        ]);
 
-        // All attendance records this month
-        const records = await Attendance.find({
-            user: { $in: allIds },
-            date: { $gte: start, $lte: end },
-        }).populate("user", "name employeeId department role").sort({ date: 1 });
+        const attMap = new Map(attendanceToday.map(a => [a.user.toString(), a]));
+        const leaveSet = new Set(leavesToday.map(l => l.user._id ? l.user._id.toString() : l.user.toString()));
 
-        // Holidays
-        const holidays = await Holiday.find({ date: { $gte: start, $lte: end } });
-        const holidayDates = new Set(holidays.map(h => moment(h.date).tz("Asia/Kolkata").date()));
-
-        // Leaves
-        const leaves = await Leave.find({
-            user: { $in: allIds },
-            status: "approved",
-            fromDate: { $lte: end },
-            toDate: { $gte: start },
-        }).populate("user", "name employeeId department role");
-
-        // ── TODAY summary — use IST dateString for consistency ──────────
-        const todayIST = moment().tz("Asia/Kolkata");
-        const todayString = todayIST.format("YYYY-MM-DD");
-
-        // Also catch records from yesterday that have no punch-out yet (overnight shifts)
-        const yesterdayString = todayIST.clone().subtract(1, "day").format("YYYY-MM-DD");
-
-        const todayRecords = await Attendance.find({
-            user: { $in: allIds },
-            $or: [
-                { dateString: todayString },
-                { dateString: yesterdayString, punchOut: null }, // overnight / late-shift
-            ],
-        }).populate("user", "name employeeId department designation role");
-
-        // Keep `today` as a JS Date for leave-range comparisons below
-        const today = todayIST.clone().startOf("day").toDate();
-        const todayEnd = todayIST.clone().endOf("day").toDate();
-
-        // Who is on leave today
-        const onLeaveToday = leaves.filter(l => {
-            const from = new Date(l.fromDate); from.setHours(0, 0, 0, 0);
-            const to = new Date(l.toDate); to.setHours(23, 59, 59, 999);
-            return today >= from && today <= to;
-        });
-
-        const onLeaveTodayIds = new Set(onLeaveToday.map(l => l.user._id.toString()));
-        const todayRecordMap = {};
-        todayRecords.forEach(r => { todayRecordMap[r.user._id.toString()] = r; });
-
-        const isHolidayToday = isWeekend(today) || holidayDates.has(moment(today).tz("Asia/Kolkata").date());
-
-        const todaySummary = allEmployees.map(emp => {
-            const rec = todayRecordMap[emp._id.toString()];
-            const onLeave = onLeaveTodayIds.has(emp._id.toString());
-
-            const empSc = getShiftConfig(emp.shift);
-            const nowMins = todayIST.hour() * 60 + todayIST.minute();
-            const shiftNotStartedYet = nowMins < empSc.shiftStart;
-
-            let attendanceStatus;
-            if (rec?.punchIn && rec?.punchOut) {
-                attendanceStatus = "punched_out";
-            } else if (rec?.punchIn) {
-                const shiftEndMins = empSc.shiftEnd === 0 ? 1440 : empSc.shiftEnd;
-                const punchInMoment = moment(rec.punchIn).tz("Asia/Kolkata");
-                const isPunchInFromYesterday = punchInMoment.format("YYYY-MM-DD") !== todayString;
-                const shiftOver = isPunchInFromYesterday || nowMins > shiftEndMins + 60;
-                attendanceStatus = shiftOver ? "missed_punchout" : "punched_in";
-            } else if (onLeave) {
-                attendanceStatus = "on_leave";
-            } else if (isHolidayToday) {
-                attendanceStatus = "holiday";
-            } else if (shiftNotStartedYet) {
-                attendanceStatus = "not_started";
-            } else {
-                attendanceStatus = "absent";
+        const todaySummary = users.map(u => {
+            const att = attMap.get(u._id.toString());
+            const onLeave = leaveSet.has(u._id.toString());
+            let attendanceStatus = "absent";
+            if (onLeave) attendanceStatus = "on_leave";
+            else if (att) {
+                attendanceStatus = att.punchOut ? "punched_out" : "punched_in";
             }
 
-            // Derive shift end for this specific employee
-            const empShiftConfig = getShiftConfig(emp.shift);
-            const shiftEndHour = Math.floor(empShiftConfig.shiftEnd / 60);
-            const shiftEndMinute = empShiftConfig.shiftEnd % 60;
-            const nowTotalMinutes = todayIST.hour() * 60 + todayIST.minute();
-            // Treat midnight (0) as 1440 so shifts ending at 00:00 don't fire all day
-            const shiftEndTotalMinutes = empShiftConfig.shiftEnd === 0 ? 1440 : empShiftConfig.shiftEnd;
-            // Only flag missed punch-out if current time is 30+ mins past their shift end
-            // Check missed punch-out accounting for overnight/next-day scenario
-            const punchInMoment = rec?.punchIn ? moment(rec.punchIn).tz("Asia/Kolkata") : null;
-            const punchInDateString = punchInMoment ? punchInMoment.format("YYYY-MM-DD") : null;
-            const isPunchInFromYesterday = punchInDateString && punchInDateString !== todayString;
-
-            const missedPunchOut = !!(
-                rec?.punchIn &&
-                !rec?.punchOut &&
-                !onLeave &&
-                (
-                    // Same day: current time is 30+ mins past their shift end
-                    (!isPunchInFromYesterday && nowMins > shiftEndTotalMinutes + 30) ||
-                    // Previous day punch-in: shift has definitely ended (next day already)
-                    isPunchInFromYesterday
-                )
-            );
-
             return {
-                _id: emp._id,
-                name: emp.name,
-                employeeId: emp.employeeId,
-                department: emp.department,
-                designation: emp.designation,
-                role: emp.role,
+                ...u,
+                punchIn: att?.punchIn,
+                punchOut: att?.punchOut,
+                workHours: att?.workHours,
+                lateMinutes: att?.lateMinutes,
+                isLate: att?.isLate,
+                isHalfDay: att?.isHalfDay,
                 attendanceStatus,
-                shiftStartHour: Math.floor(empSc.shiftStart / 60),
-                shiftStartMinute: empSc.shiftStart % 60,
-                punchIn: rec?.punchIn || null,
-                punchOut: rec?.punchOut || null,
-                workHours: rec?.workHours || null,
-                isLate: rec?.isLate || false,
-                isHalfDay: rec?.isHalfDay || false,
-                lateMinutes: rec?.lateMinutes || 0,
-                missedPunchOut,
-                onLeave,
-                leaveType: onLeave ? onLeaveToday.find(l => l.user._id.toString() === emp._id.toString())?.type : null,
-                shiftEndHour,
-                shiftEndMinute,
+                onLeave
             };
         });
 
-        // ── Monthly stats per employee ──────────────────
-        const recordsByUser = {};
-        records.forEach(r => {
-            const uid = r.user._id.toString();
-            if (!recordsByUser[uid]) recordsByUser[uid] = [];
-            recordsByUser[uid].push(r);
-        });
+        const activeUserIds = new Set(users.map(u => u._id.toString()));
+        const punchedInIds = new Set(attendanceToday.map(a => a.user.toString()));
+        const onLeaveIds = new Set(leavesToday.map(l => (l.user._id ? l.user._id : l.user).toString()));
 
-        const monthlyStats = allEmployees.map(emp => {
-            const uid = emp._id.toString();
-            const empRecords = recordsByUser[uid] || [];
-            const empLeaves = leaves.filter(l => l.user._id.toString() === uid);
+        const absentToday = [...activeUserIds].filter(id => !punchedInIds.has(id) && !onLeaveIds.has(id)).length;
 
-            const halfDays = empRecords.filter(r => r.isHalfDay).length;
-            const presentDays = empRecords.filter(r => !r.isHalfDay && r.status === "present").length;
-            const lateDays = empRecords.filter(r => r.isLate && !r.isHalfDay).length;
-            const absentDays = empRecords.filter(r => r.status === "absent").length;
-            const leaveDays = empLeaves.reduce((acc, l) => {
-                return acc + (l.totalDays || (
-                    Math.ceil(
-                        (new Date(l.toDate) - new Date(l.fromDate)) /
-                        (1000 * 60 * 60 * 24)
-                    ) + 1
-                ));
-            }, 0);
+        const todayOverview = {
+            totalActive: users.length,
+            punchedIn: attendanceToday.filter(a => !a.punchOut && !a.missedPunchOut).length,
+            punchedOut: attendanceToday.filter(a => a.punchOut).length,
+            absentToday,
+            onLeaveTodayCount: leavesToday.length,
+            lateToday: attendanceToday.filter(a => a.isLate).length,
+            missedPunchOut: attendanceToday.filter(a => a.missedPunchOut).length
+        };
 
-            const totalWorkHours = parseFloat(
-                empRecords.reduce((sum, r) => sum + (r.workHours || 0), 0).toFixed(2)
-            );
-            const totalLateMinutes = Math.round(empRecords.reduce((sum, r) => sum + (r.lateMinutes || 0), 0));
-            const workedDays = empRecords.filter(r => r.workHours > 0).length;
-            const avgDailyHours = workedDays
-                ? parseFloat((totalWorkHours / workedDays).toFixed(2))
-                : 0;
-
+        // Monthly stats aggregation using centralized service
+        const monthlyStats = await Promise.all(users.map(async (u) => {
+            const grid = await attendanceService.getAttendanceGrid(u._id, monthStart, monthEnd);
+            const stats = attendanceService.calculateStats(grid);
             return {
-                _id: emp._id,
-                name: emp.name,
-                employeeId: emp.employeeId,
-                department: emp.department,
-                designation: emp.designation,
-                role: emp.role,
+                ...u,
                 stats: {
-                    presentDays, halfDays, lateDays, absentDays, leaveDays,
-                    totalWorkHours, totalLateMinutes, avgDailyHours, workedDays,
-                },
+                    ...stats,
+                    presentDays: stats.present,
+                    halfDays: stats.halfDay,
+                    lateDays: stats.late,
+                    leaveDays: stats.leave,
+                    absentDays: stats.absent,
+                }
             };
-        });
+        }));
 
-        // ── Overall today counts ────────────────────────
-        const totalActive = allEmployees.length;
-        const punchedIn = todaySummary.filter(e => e.attendanceStatus === "punched_in").length;
-        const punchedOut = todaySummary.filter(e => e.punchOut).length;
-        const absentToday = todaySummary.filter(e => e.attendanceStatus === "absent").length;
-        const onLeaveTodayCount = todaySummary.filter(e => e.attendanceStatus === "on_leave").length;
-        const missedPunchOut = todaySummary.filter(e => e.missedPunchOut).length;
-        const lateToday = todaySummary.filter(e => e.isLate).length;
-        const officeNotOpenCount = todaySummary.filter(e => e.attendanceStatus === "not_started").length;
-
-        res.json({
-            success: true,
-            todayOverview: {
-                totalActive, punchedIn, punchedOut,
-                absentToday, onLeaveTodayCount,
-                missedPunchOut, lateToday,
-                officeNotOpenCount,
-            },
-            todaySummary,
-            monthlyStats,
-            leaves: leaves.map(l => ({
-                _id: l._id,
-                user: {
-                    name: l.user.name,
-                    employeeId: l.user.employeeId,
-                    department: l.user.department,
-                    role: l.user.role,
-                },
-                type: l.type,
-                fromDate: l.fromDate,
-                toDate: l.toDate,
-                totalDays: l.totalDays,
-                status: l.status,
-            })),
-            holidays: holidays.map(h => ({ date: h.date, name: h.name })),
-            month: Number(month),
-            year: Number(year),
-        });
-
+        res.status(200).json({ success: true, todaySummary, todayOverview, monthlyStats, leaves: leavesToday });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
 // ─────────────────────────────────────────────
-//  GET DAY-WISE ATTENDANCE (HR)
-//  GET /attendance/day-wise?date=2026-06-12&page=1&limit=20&search=...&department=...&status=...
+//  GET DAY WISE ATTENDANCE
 // ─────────────────────────────────────────────
 const getDayWiseAttendance = async (req, res) => {
     try {
-        const { date, page = 1, limit = 50, search = "", department = "all", status = "all" } = req.query;
+        const { date, search, department, status: statusFilter } = req.query;
 
-        const targetMoment = date 
-            ? moment.tz(date, "YYYY-MM-DD", "Asia/Kolkata") 
-            : moment().tz("Asia/Kolkata");
-        
-        const dateString = targetMoment.format("YYYY-MM-DD");
-        const dayStart = targetMoment.clone().startOf("day").toDate();
-        const dayEnd = targetMoment.clone().endOf("day").toDate();
+        const queryDate = date
+            ? moment.tz(date, "Asia/Kolkata").startOf("day")
+            : moment().tz("Asia/Kolkata").startOf("day");
 
-        // 1. Get All Employees first (to compute absent/leave)
-        const employeeQuery = {
-            role: { $in: ["employee", "tl"] },
+        const users = await User.find({
             status: "active",
-        };
-
-        if (department !== "all") {
-            employeeQuery.department = department;
-        }
-
-        if (search) {
-            employeeQuery.$or = [
-                { name: { $regex: search, $options: "i" } },
-                { employeeId: { $regex: search, $options: "i" } },
-            ];
-        }
-
-        const allEmployees = await User.find(employeeQuery)
-            .select("name employeeId department designation shift joiningDate")
+            role: { $nin: ["superadmin", "manager"] }
+        })
+            .select("name employeeId department joiningDate createdAt shift")
             .lean();
 
-        const employeeIds = allEmployees.map(e => e._id);
+        const data = await Promise.all(
+            users.map(async (u) => {
+                const grid = await attendanceService.getAttendanceGrid(
+                    u._id,
+                    queryDate.toDate(),
+                    queryDate.toDate()
+                );
 
-        // 2. Fetch Attendance, Leaves, Holidays
-        const [attendanceRecords, approvedLeaves, holiday] = await Promise.all([
-            Attendance.find({
-                user: { $in: employeeIds },
-                dateString: dateString
-            }).lean(),
+                const day = grid?.[0] || {};
 
-            Leave.find({
-                user: { $in: employeeIds },
-                status: "approved",
-                fromDate: { $lte: dayEnd },
-                toDate: { $gte: dayStart }
-            }).lean(),
+                let normalizedStatus = day.status || "absent";
 
-            Holiday.findOne({
-                date: { $gte: dayStart, $lte: dayEnd }
-            }).lean()
-        ]);
+                if (day.status === "on_leave") {
+                    normalizedStatus = "leave";
+                }
 
-        const attMap = {};
-        attendanceRecords.forEach(r => attMap[r.user.toString()] = r);
+                if (day.status === "half-day" || day.isHalfDay) {
+                    normalizedStatus = "halfday";
+                }
 
-        const leaveMap = {};
-        approvedLeaves.forEach(l => leaveMap[l.user.toString()] = l);
+                return {
+                    ...u,
+                    ...day,
+                    status: normalizedStatus
+                };
+            })
+        );
 
-        const isWeekendDay = isWeekend(dayStart);
+        // Filtering
+        const filtered = data.filter((item) => {
+            const matchesSearch =
+                !search ||
+                item.name?.toLowerCase().includes(search.toLowerCase()) ||
+                item.employeeId?.toLowerCase().includes(search.toLowerCase());
 
-        // 3. Process each employee to determine status
-        let processedData = allEmployees.map(emp => {
-            const att = attMap[emp._id.toString()];
-            const leave = leaveMap[emp._id.toString()];
-            const isHolidayDay = !!holiday || isWeekendDay;
+            const matchesDept =
+                !department ||
+                department === "all" ||
+                item.department === department;
 
-            let currentStatus = "absent";
-            if (att) {
-                if (att.isHalfDay) currentStatus = "halfday";
-                else if (att.isLate) currentStatus = "late";
-                else currentStatus = "present";
-            } else if (leave) {
-                currentStatus = "leave";
-            } else if (isHolidayDay) {
-                currentStatus = "holiday";
-            }
+            const matchesStatus =
+                !statusFilter ||
+                statusFilter === "all" ||
+                item.status === statusFilter;
 
-            return {
-                _id: emp._id,
-                name: emp.name,
-                employeeId: emp.employeeId,
-                department: emp.department,
-                designation: emp.designation,
-                punchIn: att?.punchIn || null,
-                punchOut: att?.punchOut || null,
-                workHours: att?.workHours || 0,
-                lateMinutes: att?.lateMinutes || 0,
-                status: currentStatus,
-                isLate: att?.isLate || false,
-                isHalfDay: att?.isHalfDay || false
-            };
+            return matchesSearch && matchesDept && matchesStatus;
         });
 
-        // 4. Filter by status if requested
-        if (status !== "all") {
-            processedData = processedData.filter(d => d.status === status);
-        }
-
-        // 5. Compute Summary
         const summary = {
-            present: processedData.filter(d => d.status === "present").length,
-            late: processedData.filter(d => d.status === "late").length,
-            halfday: processedData.filter(d => d.status === "halfday").length,
-            absent: processedData.filter(d => d.status === "absent").length,
-            leave: processedData.filter(d => d.status === "leave").length,
-            holiday: processedData.filter(d => d.status === "holiday").length,
+            total: filtered.length,
+            present: filtered.filter((a) => a.status === "present").length,
+            late: filtered.filter((a) => a.status === "late").length,
+            halfday: filtered.filter(
+                (a) =>
+                    a.status === "halfday" ||
+                    a.status === "half-day" ||
+                    a.isHalfDay
+            ).length,
+            absent: filtered.filter((a) => a.status === "absent").length,
+            leave: filtered.filter(
+                (a) =>
+                    a.status === "leave" ||
+                    a.status === "on_leave"
+            ).length,
+            holiday: filtered.filter((a) => a.status === "holiday").length,
+            weekend: filtered.filter((a) => a.status === "weekend").length
         };
 
-        // 6. Pagination
-        const total = processedData.length;
-        const startIndex = (Number(page) - 1) * Number(limit);
-        const paginatedData = processedData.slice(startIndex, startIndex + Number(limit));
-
-        res.json({
+        res.status(200).json({
             success: true,
-            date: dateString,
+            data: filtered,
             summary,
-            total,
-            page: Number(page),
-            limit: Number(limit),
-            totalPages: Math.ceil(total / Number(limit)),
-            data: paginatedData,
-            allData: status === "all" && department === "all" && !search ? null : undefined // for export if needed
+            total: filtered.length
         });
-
     } catch (error) {
-        console.error("getDayWiseAttendance Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        console.error("Get Day Wise Attendance Error:", error);
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
     }
 };
 
@@ -2625,5 +778,5 @@ module.exports = {
     getWeeklyAttendanceSummary,
     getTeamAttendance,
     getHRAttendanceOverview,
-    getDayWiseAttendance,
+    getDayWiseAttendance
 };

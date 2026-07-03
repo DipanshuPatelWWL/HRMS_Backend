@@ -52,6 +52,20 @@ const finalizeApproval = async (leave) => {
         cursor.add(1, "day");
     }
 
+    const attendancesToOverwrite = await Attendance.find({
+        user: leave.user,
+        dateString: { $in: dateStrings },
+    }).lean();
+
+    if (attendancesToOverwrite.length > 0) {
+        // Strip internal MongoDB fields to prevent DuplicateKey errors on restore
+        const strippedAttendances = attendancesToOverwrite.map(att => {
+            const { _id, __v, createdAt, updatedAt, ...rest } = att;
+            return rest;
+        });
+        leave.overwrittenAttendances = strippedAttendances;
+    }
+
     await Attendance.deleteMany({
         user: leave.user,
         dateString: { $in: dateStrings },
@@ -90,13 +104,39 @@ const applyLeave = async (req, res) => {
         const userName = req.user.name;
         const employeeId = req.user.employeeId;
 
-        const { type, fromDate, toDate, reason, attachment } = req.body;
+        const {
+            type,
+            fromDate,
+            toDate,
+            reason,
+            attachment,
+            duration = "full-day",
+            halfDaySession = null,
+        } = req.body;
 
         // ── Validation ────────────────────────────
         if (!type || !fromDate || !toDate || !reason) {
             return res.status(400).json({
                 success: false,
                 message: "type, fromDate, toDate and reason are required",
+            });
+        }
+
+        if (!["full-day", "half-day"].includes(duration)) {
+            return res.status(400).json({
+                success: false,
+                message: "duration must be 'full-day' or 'half-day'",
+            });
+        }
+
+        if (
+            duration === "half-day" &&
+            halfDaySession != null &&
+            !["first-half", "second-half"].includes(halfDaySession)
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: "halfDaySession must be 'first-half' or 'second-half'",
             });
         }
 
@@ -132,13 +172,28 @@ const applyLeave = async (req, res) => {
         }
 
         // ── Count working days only ───────────────
-        const totalDays = await countWorkingDays(from, to);
+        let totalDays = await countWorkingDays(from, to);
 
         if (totalDays === 0) {
             return res.status(400).json({
                 success: false,
                 message: "No working days in selected range (only weekends/holidays)",
             });
+        }
+
+        if (duration === "half-day") {
+            const isSingleDay =
+                moment(from).tz("Asia/Kolkata").format("YYYY-MM-DD") ===
+                moment(to).tz("Asia/Kolkata").format("YYYY-MM-DD");
+
+            if (!isSingleDay) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Half-day leave must be for a single day",
+                });
+            }
+
+            totalDays = 0.5;
         }
 
         // ── Overlap check (normalized dates) ──────
@@ -173,6 +228,8 @@ const applyLeave = async (req, res) => {
             fromDate: from,
             toDate: to,
             totalDays,
+            duration,
+            halfDaySession: duration === "half-day" ? halfDaySession : null,
             reason,
             attachment: attachment || "",
             tlApproval: skipTL
@@ -636,6 +693,18 @@ const revokeLeave = async (req, res) => {
         leave.status = "revoked";
         leave.paidDays = 0;
         leave.unpaidDays = 0;
+        
+        // Restore overwritten attendance records
+        if (leave.overwrittenAttendances && leave.overwrittenAttendances.length > 0) {
+            for (const att of leave.overwrittenAttendances) {
+                try {
+                    await Attendance.create(att);
+                } catch(e) { 
+                    // Ignore duplicate key errors if the user somehow punched in again
+                }
+            }
+        }
+        
         await leave.save();
 
         // ✅ Notify employee — io passed correctly
@@ -671,13 +740,24 @@ const deleteLeave = async (req, res) => {
         }
 
         // If approved and had paid days, restore balance before deleting
-        if (leave.status === "approved" && leave.paidDays > 0) {
-            await User.findByIdAndUpdate(leave.user, {
-                $inc: {
-                    // "leaveBalance.total": leave.paidDays,
-                    [`leaveBalance.${leave.type}.used`]: -leave.paidDays,
-                },
-            });
+        if (leave.status === "approved") {
+            if (leave.paidDays > 0) {
+                await User.findByIdAndUpdate(leave.user, {
+                    $inc: {
+                        [`leaveBalance.${leave.type}.used`]: -leave.paidDays,
+                    },
+                });
+            }
+            // Restore overwritten attendance records
+            if (leave.overwrittenAttendances && leave.overwrittenAttendances.length > 0) {
+                for (const att of leave.overwrittenAttendances) {
+                    try {
+                        await Attendance.create(att);
+                    } catch(e) { 
+                        // Ignore duplicate key errors
+                    }
+                }
+            }
         }
 
         await Leave.findByIdAndDelete(id);

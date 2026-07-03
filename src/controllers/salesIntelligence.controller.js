@@ -135,8 +135,7 @@ exports.generateLeads = async (req, res) => {
                 });
             }
 
-            console.log(`✅ Python health OK — sending find-leads request`);
-            console.time("python_find_leads");
+            console.log(`Python health OK — sending find-leads request`);
             const response = await pythonClient.post(
                 "/api/find-leads",
                 {
@@ -156,13 +155,7 @@ exports.generateLeads = async (req, res) => {
                 },
                 { timeout: 90000 }
             );
-            console.timeEnd("python_find_leads");
-            console.log("=================================");
-            console.log("PYTHON FULL RESPONSE");
-            console.log(JSON.stringify(response.data, null, 2));
-            console.log("=================================");
-            pythonLeads = response.data?.leads || [];
-            console.log(`✅ Python returned ${pythonLeads.length} leads. Success: ${response.data?.success}`);
+            console.log(`Python returned ${pythonLeads.length} leads. Success: ${response.data?.success}`);
         } catch (pyErr) {
             console.timeEnd("python_find_leads");
             if (pyErr.response?.status === 422) {
@@ -178,7 +171,6 @@ exports.generateLeads = async (req, res) => {
             });
         }
 
-        console.log(`[SALES_CTRL] Processing ${pythonLeads.length} leads...`);
         if (!pythonLeads.length) {
             console.log(`[SALES_CTRL] No leads to process, returning 200 OK with empty array`);
             return res.json({ success: true, inserted: 0, skipped: 0, leads: [], message: `No leads found for: "${keyword}"` });

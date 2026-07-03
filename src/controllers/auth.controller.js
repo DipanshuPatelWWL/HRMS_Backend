@@ -163,7 +163,7 @@ const signup = async (req, res) => {
 
 const login = async (req, res) => {
     try {
-        const { email, password } = req.body;
+        const { email, password, deviceUUID, productId, hostname, os } = req.body;
 
         const user = await User.findOne({ email }).select("+password");
 
@@ -221,11 +221,89 @@ const login = async (req, res) => {
 
         const token = generateToken(user, sessionId);
 
+        // ── Device Token Logic ────────────────────────────────────────
+        let deviceToken = null;
+        let devicePending = false;
+        let deviceApprovalId = null;
+
+        if (deviceUUID || productId) {
+            // Check if device already approved
+            const matchedDevice = user.approvedDevices?.find(
+                d => (productId && d.productId === productId) ||
+                    (deviceUUID && d.deviceUUID === deviceUUID)
+            );
+
+            if (matchedDevice) {
+                // Device approved — return existing token
+                deviceToken = matchedDevice.deviceToken;
+                // Update lastUsedAt
+                await User.updateOne(
+                    { _id: user._id, "approvedDevices.deviceToken": deviceToken },
+                    { $set: { "approvedDevices.$.lastUsedAt": new Date() } }
+                );
+            } else {
+                // New device — check if approval already pending
+                const DeviceApproval = require("../models/deviceApproval.model");
+                const existingRequest = await DeviceApproval.findOne({
+                    user: user._id,
+                    productId: productId || "",
+                    status: "pending",
+                });
+
+                if (!existingRequest) {
+                    // Create new approval request
+                    const ipAddress = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
+                        req.socket?.remoteAddress || "";
+                    const userAgent = req.headers["user-agent"] || "";
+
+                    const approval = await DeviceApproval.create({
+                        user: user._id,
+                        deviceUUID: deviceUUID || "",
+                        productId: productId || "",
+                        hostname: hostname || "",
+                        os: os || "",
+                        browser: parseDeviceInfo(userAgent),
+                        ipAddress,
+                        userAgent,
+                        status: "pending",
+                    });
+
+                    deviceApprovalId = approval._id;
+
+                    // Notify HR
+                    const hrUsers = await User.find({
+                        role: { $in: ["hr", "manager"] },
+                        status: "active"
+                    }).select("_id").lean();
+
+                    const io = req.app?.get?.("io");
+                    if (io) {
+                        for (const hr of hrUsers) {
+                            const { createNotification } = require("./notification.controller");
+                            await createNotification(
+                                io,
+                                hr._id.toString(),
+                                "New Device Approval Request",
+                                `${user.name} is requesting access from a new device`,
+                                "device_approval",
+                                { userId: user._id, approvalId: approval._id }
+                            );
+                        }
+                    }
+                }
+
+                devicePending = true;
+            }
+        }
+
         res.status(200).json({
             success: true,
             message: "Login successful",
             token,
             user,
+            deviceToken,
+            devicePending,
+            deviceApprovalId,
         });
 
     } catch (error) {

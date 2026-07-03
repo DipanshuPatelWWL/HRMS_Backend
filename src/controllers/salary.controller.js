@@ -53,7 +53,8 @@ const getMonthlySalary = async (req, res) => {
         const data = await calculateSalary(
             userId,
             parseInt(month),
-            parseInt(year)
+            parseInt(year),
+            true
         );
 
         if (!data) {
@@ -131,34 +132,34 @@ const updateSalaryStructure = async (req, res) => {
             return res.status(404).json({ success: false, message: "User not found" });
         }
 
-        // ── Validate structure percents add up to 100 ──
+        // ── Validate structure ──
         if (structure) {
             const keys = ["basic", "hra", "specialAllowance", "conveyance", "otherAllowance"];
-            let total = 0;
             for (const key of keys) {
-                if (structure[key]?.enabled) {
+                if (structure[key]) {
                     const pct = Number(structure[key].percent || 0);
                     if (pct < 0 || pct > 100) {
                         return res.status(400).json({ success: false, message: `Invalid percent for ${key}` });
                     }
-                    total += pct;
                 }
             }
-            if (Math.round(total) !== 100) {
-                return res.status(400).json({
-                    success: false,
-                    message: `Enabled component percents must add up to 100% (currently ${total}%)`,
-                });
-            }
+            // Note: We've relaxed the 100% sum check here because the salary engine 
+            // now handles auto-balancing via Special Allowance and pro-rated HRA.
             user.salary.structure = structure;
         }
 
         if (deductions) {
-            // Validate PF percent
-            if (deductions.pf?.enabled && (deductions.pf.percent < 0 || deductions.pf.percent > 100)) {
-                return res.status(400).json({ success: false, message: "Invalid PF percent" });
+            // Validate PF
+            if (deductions.pf?.enabled) {
+                if (deductions.pf.percent < 0 || deductions.pf.percent > 100) {
+                    return res.status(400).json({ success: false, message: "Invalid PF percent" });
+                }
+                if (deductions.pf.pfMode && !["actual", "capped"].includes(deductions.pf.pfMode)) {
+                    return res.status(400).json({ success: false, message: "Invalid PF mode" });
+                }
             }
-            // Validate PF number (UAN = 12 digits OR old format — loose check)
+            
+            // Validate PF number
             if (deductions.pf?.enabled && deductions.pf.pfNumber) {
                 const pfNum = deductions.pf.pfNumber.trim().toUpperCase();
                 if (pfNum.length < 5) {
@@ -167,17 +168,32 @@ const updateSalaryStructure = async (req, res) => {
                 deductions.pf.pfNumber = pfNum;
             }
 
-            // Validate ESI percent
-            if (deductions.esi?.enabled && (deductions.esi.percent < 0 || deductions.esi.percent > 100)) {
-                return res.status(400).json({ success: false, message: "Invalid ESI percent" });
-            }
-            // Validate ESI number (17 digits)
-            if (deductions.esi?.enabled && deductions.esi.esiNumber) {
-                const esiNum = deductions.esi.esiNumber.trim();
-                if (!/^\d{17}$/.test(esiNum)) {
-                    return res.status(400).json({ success: false, message: "ESI number must be exactly 17 digits" });
+            // Validate ESI
+            if (deductions.esi?.enabled) {
+                if (deductions.esi.percent < 0 || deductions.esi.percent > 100) {
+                    return res.status(400).json({ success: false, message: "Invalid ESI percent" });
                 }
-                deductions.esi.esiNumber = esiNum;
+                if (deductions.esi.esiNumber) {
+                    const esiNum = deductions.esi.esiNumber.trim();
+                    if (!/^\d{17}$/.test(esiNum)) {
+                        return res.status(400).json({ success: false, message: "ESI number must be exactly 17 digits" });
+                    }
+                    deductions.esi.esiNumber = esiNum;
+                }
+            }
+
+            // Professional Tax State Validation & Normalization
+            if (deductions.professionalTax?.enabled && deductions.professionalTax.state) {
+                const stateMap = {
+                    "Uttar Pradesh": "UP", "Delhi": "DL", "Haryana": "HR",
+                    "Maharashtra": "MH", "Karnataka": "KA", "Telangana": "TG",
+                    "UP": "UP", "DL": "DL", "HR": "HR", "MH": "MH", "KA": "KA", "TG": "TG"
+                };
+                const normalized = stateMap[deductions.professionalTax.state];
+                if (!normalized) {
+                    return res.status(400).json({ success: false, message: "Invalid state for Professional Tax" });
+                }
+                deductions.professionalTax.state = normalized;
             }
 
             user.salary.deductions = deductions;

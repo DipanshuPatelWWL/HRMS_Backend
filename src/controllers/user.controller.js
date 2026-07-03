@@ -132,11 +132,14 @@ const getAllUsers = async (req, res) => {
 
         if (req.user.role === "hr") {
             filter.role = { $in: ["employee", "tl", "hr"] };
+            filter.isDeleted = { $ne: true };
         } else if (req.user.role === "manager") {
             filter.role = { $in: ["employee", "tl", "hr", "manager"] };
             filter.status = { $ne: "terminated" };
+            filter.isDeleted = { $ne: true };
         } else if (req.user.role === "tl") {
             filter.reportingTo = req.user._id;
+            filter.isDeleted = { $ne: true };
         }
 
         const users = await User.find(filter).select("-password");
@@ -354,13 +357,24 @@ const updateUser = async (req, res) => {
 // ─────────────────────────────────────────────
 const deleteUser = async (req, res) => {
     try {
-        const user = await User.findByIdAndDelete(req.params.id);
+        const user = await User.findByIdAndUpdate(
+            req.params.id,
+            {
+                $set: {
+                    status: "terminated",
+                    isDeleted: true,
+                    deletedAt: new Date(),
+                    deletedBy: req.user._id
+                }
+            },
+            { new: true }
+        );
 
         if (!user) {
             return res.status(404).json({ success: false, message: "User not found" });
         }
 
-        res.status(200).json({ success: true, message: "User deleted" });
+        res.status(200).json({ success: true, message: "Employee removed. History preserved." });
 
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -718,33 +732,6 @@ const updateBankDetails = async (req, res) => {
             },
         });
 
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-    }
-};
-
-
-// ─────────────────────────────────────────────
-//  DEBUG (Dev only)
-// ─────────────────────────────────────────────
-const debugUsers = async (req, res) => {
-    try {
-        const allUsers = await User.find();
-        const employees = await User.find({ role: "employee" });
-        const byRole = await User.aggregate([
-            { $group: { _id: "$role", count: { $sum: 1 } } },
-        ]);
-
-        res.json({
-            totalUsers: allUsers.length,
-            employeeCount: employees.length,
-            roleBreakdown: byRole,
-            sampleUsers: allUsers.slice(0, 5).map(u => ({
-                name: u.name,
-                role: u.role,
-                email: u.email,
-            })),
-        });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -1179,10 +1166,92 @@ const manageShiftReminder = async (req, res) => {
 };
 
 
+// ─────────────────────────────────────────────
+//  GET ARCHIVED (INACTIVE) EMPLOYEES
+//  GET /users/archived
+// ─────────────────────────────────────────────
+const getArchivedEmployees = async (req, res) => {
+    try {
+        const users = await User.find({
+            status: "inactive",
+            isDeleted: { $ne: true }
+        }).select("-password").lean();
+
+        res.status(200).json({ success: true, users });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ─────────────────────────────────────────────
+//  GET TERMINATED EMPLOYEES (including soft-deleted)
+//  GET /users/terminated
+// ─────────────────────────────────────────────
+const getTerminatedEmployees = async (req, res) => {
+    try {
+        const users = await User.find({
+            $or: [
+                { status: "terminated" },
+                { isDeleted: true }
+            ]
+        }).select("-password").lean();
+
+        res.status(200).json({ success: true, users });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ─────────────────────────────────────────────
+//  GET EMPLOYEE FULL HISTORY (for archived/terminated)
+//  GET /users/:id/history
+// ─────────────────────────────────────────────
+const getEmployeeHistory = async (req, res) => {
+    try {
+        const Attendance = require("../models/attendance.model");
+        const Leave = require("../models/leave.model");
+
+        const userId = req.params.id;
+
+        const [user, attendance, leaves] = await Promise.all([
+            User.findById(userId).select("-password").lean(),
+            Attendance.find({ user: userId }).sort({ date: -1 }).lean(),
+            Leave.find({ user: userId }).sort({ createdAt: -1 }).lean(),
+        ]);
+
+        if (!user) {
+            return res.status(404).json({ success: false, message: "Employee not found" });
+        }
+
+        // Attendance summary
+        const summary = {
+            totalPresent: attendance.filter(a => a.status === "present").length,
+            totalHalfDay: attendance.filter(a => a.isHalfDay).length,
+            totalLate: attendance.filter(a => a.isLate).length,
+            totalAbsent: 0, // calculated from grid if needed
+            totalLeaves: leaves.filter(l => l.status === "approved").length,
+        };
+
+        res.status(200).json({
+            success: true,
+            user,
+            attendance,
+            leaves,
+            summary
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 module.exports = {
     createUserByHR,
     getUserList,
     getAllUsers,
+    getArchivedEmployees,
+    getTerminatedEmployees,
+    getEmployeeHistory,
     getAllTLs,
     assignTeamToTL,
     getEmployeesByTL,
@@ -1190,7 +1259,6 @@ module.exports = {
     getSingleUser,
     updateUser,
     deleteUser,
-    debugUsers,
     updateMyProfile,
     changeMyPassword,
     uploadAvatar,

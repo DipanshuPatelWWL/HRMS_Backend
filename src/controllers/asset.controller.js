@@ -1,5 +1,6 @@
 const asyncHandler = require("express-async-handler");
 const mongoose = require("mongoose");
+const bcrypt = require("bcryptjs");
 const EmployeeAssetRecord = require("../models/employeeAssetRecord.model");
 const User = require("../models/user.model");
 const Tesseract = require("tesseract.js");
@@ -248,8 +249,9 @@ const updateSystemPassword = asyncHandler(async (req, res) => {
         record = new EmployeeAssetRecord({ employee: employeeId, assets: [] });
     }
 
-    // TODO: hash with bcrypt before saving in production
-    record.systemPassword = systemPassword;
+    // Hash with bcrypt before saving in production
+    const salt = await bcrypt.genSalt(10);
+    record.systemPassword = await bcrypt.hash(systemPassword, salt);
     await record.save();
 
     res.status(200).json({ success: true, message: "System password updated" });

@@ -2,6 +2,9 @@ const Attendance = require("../../models/attendance.model");
 const Holiday = require("../../models/holiday.model");
 const Leave = require("../../models/leave.model");
 const User = require("../../models/user.model");
+const { calculateAnnualTax } = require("./tdsCalculator");
+const leaveCalculationService = require("../leaveCalculationService");
+const PayrollSettings = require("../../models/payrollSettings.model");
 
 const isWeekend = (date) => {
     const d = new Date(date).getDay();
@@ -12,21 +15,65 @@ function round2(n) {
     return Math.round(n * 100) / 100;
 }
 
+const PT_CONFIG = {
+    UP: { slabs: [{ limit: Infinity, pt: 0 }] },
+    DL: { slabs: [{ limit: Infinity, pt: 0 }] },
+    HR: { slabs: [{ limit: Infinity, pt: 0 }] },
+    MH: {
+        slabs: [
+            { limit: 7500, pt: 0 },
+            { limit: 10000, pt: 175 },
+            { limit: Infinity, pt: 200 }
+        ]
+    },
+    KA: {
+        slabs: [
+            { limit: 15000, pt: 0 },
+            { limit: Infinity, pt: 200 }
+        ]
+    },
+    TG: {
+        slabs: [
+            { limit: 15000, pt: 0 },
+            { limit: Infinity, pt: 200 }
+        ]
+    }
+};
+
+function getPT(stateCode, grossSalary, month) {
+    const config = PT_CONFIG[stateCode];
+    if (!config) return 0;
+
+    // Special case for MH Feb
+    if (stateCode === "MH" && month === 2 && grossSalary > 10000) return 300;
+
+    for (const slab of config.slabs) {
+        if (grossSalary <= slab.limit) return slab.pt;
+    }
+    return 0;
+}
+
 /**
- * SINGLE SOURCE OF TRUTH for salary calculation.
- * Used by payroll.controller.js and salary.controller.js
- *
- * FORMULA:
- *   perDay          = monthlySalary / totalWorkingDays
- *   presentEarning  = presentDays  * perDay
- *   halfDayEarning  = halfDays     * (perDay / 2)
- *   paidLeaveEarning= paidLeave    * perDay
- *   grossEarnings   = presentEarning + halfDayEarning + paidLeaveEarning
- *   absentDeduct    = absentDays   * perDay
- *   unpaidDeduct    = unpaidLeave  * perDay
- *   netSalary       = grossEarnings - absentDeduct - unpaidDeduct - statutory
+ * PRODUCTION-READY SALARY ENGINE (DEDUCTIVE MODEL)
+ * 
+ * AUDIT FINDINGS APPLIED:
+ * 1. Mid-month pro-ration for previews.
+ * 2. Deductive logic: Monthly Salary - LOP.
+ * 3. HRA Metro/Non-Metro support.
+ * 4. Fixed/Percent Allowance support.
+ * 5. Special Allowance auto-balancing.
+ * 6. TDS Integration.
+ * 7. State-wise PT Config architecture.
+ * 8. PF Ceiling (Prorated).
+ * 9. Gratuity.
  */
-const calculateSalary = async (userId, month, year) => {
+/**
+ * Mode explanations:
+ * - 'final': Standard month-end calculation. Uses whole month's attendance records.
+ * - 'earned': Calculation till 'today'. Pro-rates gross earnings to days passed.
+ * - 'projected': Month-end projection. Assumes 'present' for remaining days but includes LOPs already incurred.
+ */
+const calculateSalary = async (userId, month, year, mode = "final") => {
     const user = await User.findById(userId);
     if (!user || !user.salary?.monthly) return null;
 
@@ -34,272 +81,257 @@ const calculateSalary = async (userId, month, year) => {
     const monthStart = new Date(year, month - 1, 1);
     const monthEnd = new Date(year, month, 0, 23, 59, 59, 999);
     const totalCalendarDays = new Date(year, month, 0).getDate();
+    const today = new Date();
 
-    // ── Effective start (respect HRMS enrollment) ─────────
-    const enrollmentDate = user.createdAt
-        ? new Date(new Date(user.createdAt).setHours(0, 0, 0, 0))
-        : null;
-
+    // ── 1. EMPLOYMENT PERIOD ──────────────────────────────────────────
+    const enrollmentDate = user.createdAt ? new Date(new Date(user.createdAt).setHours(0, 0, 0, 0)) : null;
     const isLegacy = user.isLegacyEmployee === true;
+    const enrolledThisMonth = !isLegacy && enrollmentDate && enrollmentDate.getFullYear() === year && enrollmentDate.getMonth() === month - 1;
+    const effectiveStart = enrolledThisMonth ? enrollmentDate : new Date(monthStart);
 
-    const enrolledThisMonth = !isLegacy &&
-        enrollmentDate &&
-        enrollmentDate.getFullYear() === year &&
-        enrollmentDate.getMonth() === month - 1;
+    // Evaluation window for attendance/leaves
+    let evaluationEnd = monthEnd;
+    if (mode === "earned" && today < monthEnd && today >= monthStart) {
+        evaluationEnd = new Date(today.setHours(23, 59, 59, 999));
+    }
 
-    const effectiveStart = enrolledThisMonth
-        ? enrollmentDate
-        : new Date(monthStart);
+    // Reference point for "passed" days (for projection LOP check)
+    let passedEnd = evaluationEnd;
+    if (mode === "projected" && today < monthEnd && today >= monthStart) {
+        passedEnd = new Date(today.setHours(23, 59, 59, 999));
+    }
 
-    // ── Holidays ──────────────────────────────────────────
+    // ── 2. HOLIDAYS ───────────────────────────────────────────────────
     const holidays = await Holiday.find({
-        date: { $gte: effectiveStart, $lte: monthEnd }
+        date: { $gte: monthStart, $lte: monthEnd }
     });
-    const holidaySet = new Set(
-        holidays.map(h => {
-            const d = new Date(h.date);
-            d.setHours(0, 0, 0, 0);
-            return d.getTime();
-        })
-    );
-    const holidayCount = holidays.length;
+    const holidaySet = new Set(holidays.map(h => {
+        const d = new Date(h.date);
+        d.setHours(0, 0, 0, 0);
+        return d.getTime();
+    }));
 
-    // ── Working days (effectiveStart → monthEnd) ──────────
-    let totalWorkingDays = 0;
-    let totalWeekends = 0;
-    for (
-        let d = new Date(effectiveStart);
-        d <= monthEnd;
-        d.setDate(d.getDate() + 1)
-    ) {
+    // ── 3. WORKING DAYS CALCULATION ──────────────────────────────────
+    let totalWorkingDaysInMonth = 0;
+    let totalWorkingDaysEmployed = 0;
+    let totalWorkingDaysPassed = 0;
+    let totalWorkingDaysPassedForLOP = 0;
+
+    for (let d = new Date(monthStart); d <= monthEnd; d.setDate(d.getDate() + 1)) {
         const cur = new Date(d);
         cur.setHours(0, 0, 0, 0);
-        if (isWeekend(cur)) {
-            totalWeekends++;
-        } else if (!holidaySet.has(cur.getTime())) {
-            totalWorkingDays++;
-        }
-    }
-
-    if (totalWorkingDays === 0) return null;
-
-    // ── Per day rate ──────────────────────────────────────
-    // Based on working days NOT calendar days for accuracy
-    const perDay = round2(monthlySalary / totalCalendarDays);
-    const halfDayPay = round2(perDay / 2);
-
-    // ── Salary structure snapshot ─────────────────────────
-    const structure = user.salary?.structure || {};
-    const DEFAULTS = {
-        basic: { enabled: true, percent: 50 },
-        hra: { enabled: true, percent: 20 },
-        specialAllowance: { enabled: true, percent: 10 },
-        conveyance: { enabled: true, percent: 15 },
-        otherAllowance: { enabled: true, percent: 5 },
-    };
-    const LABELS = {
-        basic: "Basic Salary",
-        hra: "HRA",
-        specialAllowance: "Special Allowance",
-        conveyance: "Conveyance / Internet",
-        otherAllowance: "Other Allowance",
-    };
-
-    const salaryStructure = {};
-    for (const key of Object.keys(DEFAULTS)) {
-        const cfg = structure[key] || DEFAULTS[key];
-        const enabled = cfg.enabled ?? DEFAULTS[key].enabled;
-        const percent = cfg.percent ?? DEFAULTS[key].percent;
-        salaryStructure[key] = {
-            enabled,
-            percent,
-            amount: enabled ? round2((percent / 100) * monthlySalary) : 0,
-            label: LABELS[key],
-        };
-    }
-
-    const basicAmt = salaryStructure.basic.amount;
-
-    // ── Statutory deductions ──────────────────────────────
-    const deductionCfg = user.salary?.deductions || {};
-
-    const pfEnabled = deductionCfg.pf?.enabled ?? false;
-    const esiEnabled = deductionCfg.esi?.enabled ?? false;
-    const ptEnabled = deductionCfg.professionalTax?.enabled ?? false;
-
-    const pfPercent = deductionCfg.pf?.percent ?? 12;
-    const esiPercent = deductionCfg.esi?.percent ?? 0.75;
-    const ptFixed = deductionCfg.professionalTax?.fixedAmount ?? 0;
-
-    const grossForStructure = round2(
-        Object.values(salaryStructure).reduce((s, c) => s + c.amount, 0)
-    );
-
-    const pfAmount = pfEnabled ? round2((pfPercent / 100) * basicAmt) : 0;
-    const esiAmount = esiEnabled ? round2((esiPercent / 100) * grossForStructure) : 0;
-    const ptAmount = ptEnabled ? round2(ptFixed) : 0;
-
-    const statutoryDeductions = {
-        pf: {
-            enabled: pfEnabled,
-            percent: pfPercent,
-            amount: pfAmount,
-            label: "Provident Fund (PF)",
-            pfNumber: deductionCfg.pf?.pfNumber || "",
-        },
-        esi: {
-            enabled: esiEnabled,
-            percent: esiPercent,
-            amount: esiAmount,
-            label: "ESI",
-            esiNumber: deductionCfg.esi?.esiNumber || "",
-        },
-        professionalTax: {
-            enabled: ptEnabled,
-            fixedAmount: ptFixed,
-            amount: ptAmount,
-            label: "Professional Tax",
-        },
-    };
-    const totalStatutoryDeductions = round2(pfAmount + esiAmount + ptAmount);
-
-    // ── Approved leaves ───────────────────────────────────
-    const leaves = await Leave.find({
-        user: userId,
-        status: "approved",
-        fromDate: { $lte: monthEnd },
-        toDate: { $gte: effectiveStart },
-    });
-
-    // Build leave day set (working days only)
-    const leaveDaySet = new Set(); // all leave working days
-    const paidDaySet = new Set(); // paid leave days
-    const unpaidDaySet = new Set(); // unpaid leave days
-
-    leaves.forEach(l => {
-        const from = new Date(l.fromDate);
-        const to = new Date(l.toDate);
-        from.setHours(0, 0, 0, 0);
-
-        for (let d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) {
-            const day = new Date(d);
-            day.setHours(0, 0, 0, 0);
-
-            if (
-                day >= effectiveStart &&
-                day <= monthEnd &&
-                !isWeekend(day) &&
-                !holidaySet.has(day.getTime())
-            ) {
-                leaveDaySet.add(day.getTime());
-
-                // "unpaid" type → always unpaid regardless of balance
-                if (l.type === "unpaid") {
-                    unpaidDaySet.add(day.getTime());
-                    return;
+        if (!isWeekend(cur) && !holidaySet.has(cur.getTime())) {
+            totalWorkingDaysInMonth++;
+            if (cur >= effectiveStart) {
+                totalWorkingDaysEmployed++;
+                if (cur <= evaluationEnd) {
+                    totalWorkingDaysPassed++;
                 }
-
-                // For casual/sick/earned → use paidDays stored at approval time
-                const totalLeaveDays = l.totalDays || 1;
-                const paidRatio = (l.paidDays || 0) / totalLeaveDays;
-
-                if ((l.paidDays || 0) > 0 && paidRatio > 0) {
-                    paidDaySet.add(day.getTime());
-                } else {
-                    unpaidDaySet.add(day.getTime());
+                if (cur <= passedEnd) {
+                    totalWorkingDaysPassedForLOP++;
                 }
             }
         }
+    }
+
+    if (totalWorkingDaysInMonth === 0) return null;
+
+    const perDay = round2(monthlySalary / totalWorkingDaysInMonth);
+
+    // ── 4. LEAVES ─────────────────────────────────────────────────────
+    const leaves = await Leave.find({
+        user: userId, status: "approved",
+        fromDate: { $lte: evaluationEnd }, toDate: { $gte: effectiveStart },
     });
 
-    const paidLeave = paidDaySet.size;
-    const unpaidLeave = unpaidDaySet.size;
-
-    // ── Attendance records ────────────────────────────────
-    const records = await Attendance.find({
-        user: userId,
-        date: { $gte: effectiveStart, $lte: monthEnd },
+    let totalUnpaidLeaveDays = 0;
+    leaves.forEach(l => {
+        let workingDaysInMonth = 0;
+        const from = new Date(l.fromDate); const to = new Date(l.toDate);
+        for (let d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) {
+            const day = new Date(d); day.setHours(0, 0, 0, 0);
+            if (day >= effectiveStart && day <= evaluationEnd && !isWeekend(day) && !holidaySet.has(day.getTime())) {
+                workingDaysInMonth++;
+            }
+        }
+        // Pro-rate unpaid days if leave spans months
+        const ratio = l.totalDays > 0 ? (l.unpaidDays || 0) / l.totalDays : 0;
+        totalUnpaidLeaveDays += workingDaysInMonth * ratio;
     });
 
-    let presentDays = 0;
-    let halfDays = 0;
+    // ── 5. ATTENDANCE & SANDWICH ─────────────────────────────────────
+    const payrollData = await leaveCalculationService.calculatePayrollDays(userId, month, year);
 
-    records.forEach(a => {
-        const d = new Date(a.date);
-        d.setHours(0, 0, 0, 0);
+    // Calculate how many sandwich days can be covered by balance
+    // Sandwich days added = (Total Deducted - Actual Leave Records)
+    const sandwichDaysAdded = Math.max(0, payrollData.leaveDaysWithSandwich - payrollData.actualLeaveDays);
 
-        if (isWeekend(d)) return;
-        if (holidaySet.has(d.getTime())) return;
-        if (leaveDaySet.has(d.getTime())) return;
+    const availableBalance = (user.leaveBalance?.casual?.total || 0) - (user.leaveBalance?.casual?.used || 0) +
+        (user.leaveBalance?.sick?.total || 0) - (user.leaveBalance?.sick?.used || 0) +
+        (user.leaveBalance?.earned?.total || 0) - (user.leaveBalance?.earned?.used || 0);
 
-        if (a.isHalfDay) halfDays++;
-        else if (a.status === "present") presentDays++;
+    const unpaidSandwichDays = Math.max(0, sandwichDaysAdded - Math.max(0, availableBalance));
+
+    // ── 6. LOP CALCULATION ───────────────────────────────────────────
+    const halfDays = payrollData.halfDays || 0;
+    const absentDays = payrollData.absentDays;
+
+    const lopDays = Math.max(0, absentDays + totalUnpaidLeaveDays + unpaidSandwichDays + (halfDays * 0.5));
+    const lopAmount = round2(lopDays * perDay);
+
+    // Earnings Calculation
+    const potentialDays = (mode === "earned") ? totalWorkingDaysPassed : totalWorkingDaysEmployed;
+    const maxEarnings = round2((monthlySalary / totalWorkingDaysInMonth) * potentialDays);
+    const grossEarnings = round2(Math.max(0, maxEarnings - lopAmount));
+
+    // UI fields
+    const totalAttendanceDeductions = round2(lopAmount);
+    const presentDays = payrollData.workedDays;
+
+    // ── 7. SALARY STRUCTURE (V2 Modernized) ──────────────────────────
+    const structure = user.salary?.structure || {};
+    const earningRatio = monthlySalary > 0 ? grossEarnings / monthlySalary : 0;
+
+    let accumulated = 0;
+    const resultStructure = {};
+
+    // A. Basic (Fixed % of Gross)
+    const basicPct = structure.basic?.percent || 50;
+    const earnedBasic = round2((basicPct / 100) * monthlySalary * earningRatio);
+    resultStructure.basic = { label: "Basic Salary", amount: earnedBasic, percent: basicPct };
+    accumulated += earnedBasic;
+
+    // B. HRA (Metro/Non-Metro/Custom)
+    let hraPct = 40;
+    if (structure.hra?.type === "metro") hraPct = 50;
+    else if (structure.hra?.type === "custom") hraPct = structure.hra.percent || 40;
+
+    // HRA is calculated as % of BASIC (Standard Indian Practice)
+    const earnedHRA = round2((hraPct / 100) * earnedBasic);
+    resultStructure.hra = { label: `HRA (${structure.hra?.type || "Non-Metro"})`, amount: earnedHRA, percent: hraPct };
+    accumulated += earnedHRA;
+
+    // C. Conveyance & Other (Fixed or %)
+    ["conveyance", "otherAllowance"].forEach(key => {
+        const cfg = structure[key] || { enabled: true, type: "percent", value: key === "conveyance" ? 15 : 5 };
+        const label = key === "conveyance" ? "Conveyance / Internet" : "Other Allowance";
+
+        let amount = 0;
+        if (cfg.enabled) {
+            if (cfg.type === "fixed") {
+                amount = round2(cfg.value * earningRatio);
+            } else {
+                amount = round2((cfg.value / 100) * monthlySalary * earningRatio);
+            }
+        }
+        resultStructure[key] = { label, amount, value: cfg.value, type: cfg.type };
+        accumulated += amount;
     });
 
-    // ── Absent days ───────────────────────────────────────
-    const coveredSlots = presentDays + (halfDays * 0.5) + leaveDaySet.size;
-    const absentDays = Math.max(0, totalWorkingDays - coveredSlots);
+    // D. Special Allowance (AUTO BALANCE)
+    const specialAmount = round2(Math.max(0, grossEarnings - accumulated));
+    resultStructure.specialAllowance = { label: "Special Allowance", amount: specialAmount };
 
-    // ── Earnings (build up from zero) ─────────────────────
-    const presentEarning = round2(presentDays * perDay);
-    const halfDayEarning = round2(halfDays * halfDayPay);
-    const paidLeaveEarning = round2(paidLeave * perDay);
-    const grossEarnings = round2(
-        presentEarning + halfDayEarning + paidLeaveEarning
-    );
+    // ── 8. STATUTORY & TDS ────────────────────────────────────────────
+    const deductions = user.salary?.deductions || {};
 
-    // ── Attendance deductions ─────────────────────────────
-    const absentAmt = round2(absentDays * perDay);
-    const halfDayDeduct = round2(halfDays * halfDayPay);
-    const unpaidLeaveAmt = round2(unpaidLeave * perDay);
-    const totalAttendanceDeductions = round2(
-        unpaidLeaveAmt
-    );
-    const totalDeductions = round2(
-        totalAttendanceDeductions + totalStatutoryDeductions
-    );
+    // PF Calculation with Ceiling Support (Prorated)
+    const pfEnabled = deductions.pf?.enabled ?? false;
+    let pf = 0;
+    if (pfEnabled) {
+        const pfPct = deductions.pf.percent || 12;
+        const effectivePfMode = deductions.pf.pfMode || payrollSettings?.pfMode || "actual";
+        if (effectivePfMode === "capped") {
+            const maxPfBase = 15000 * earningRatio;
+            const applicableBase = Math.min(earnedBasic, maxPfBase);
+            pf = round2((pfPct / 100) * applicableBase);
+        } else {
+            pf = round2((pfPct / 100) * earnedBasic);
+        }
+    }
 
-    const netSalary = round2(Math.max(0, grossEarnings - unpaidLeaveAmt - totalStatutoryDeductions));
+    // ESI
+    const esi = deductions.esi?.enabled ? round2((deductions.esi.percent / 100) * grossEarnings) : 0;
+
+    // Professional Tax (Config-based)
+    let pt = 0;
+    if (deductions.professionalTax?.enabled && grossEarnings > 0) {
+        const state = deductions.professionalTax.state || "Uttar Pradesh";
+        const stateMap = {
+            "Uttar Pradesh": "UP", "Delhi": "DL", "Haryana": "HR",
+            "Maharashtra": "MH", "Karnataka": "KA", "Telangana": "TG"
+        };
+        const stateCode = stateMap[state] || state;
+        pt = getPT(stateCode, grossEarnings, month);
+    }
+
+    // TDS Calculation
+    const payrollSettings = await PayrollSettings.findOne({ singletonKey: "singleton" });
+    const fy = payrollSettings?.financialYear || "2025-26";
+    const taxProj = calculateAnnualTax(monthlySalary * 12, fy);
+    const tds = taxProj.monthlyTDS;
+
+    const totalStatutory = round2(pf + esi + pt + tds);
+    const netSalary = round2(Math.max(0, grossEarnings - totalStatutory));
+
+    // ── 9. EMPLOYER CONTRIBUTIONS ─────────────────────────────────────
+    const gratuity = round2(earnedBasic * 0.0481);
 
     return {
-        // ── Config ──────────────────────────────────────
         monthlySalary,
-        totalWorkingDays,
-        totalCalendarDays,
-        totalWeekends,
         perDaySalary: perDay,
-        halfDaySalary: halfDayPay,
-
-        // ── Attendance ──────────────────────────────────
+        totalCalendarDays,
+        totalWorkingDays: totalWorkingDaysInMonth,
+        workingDaysPassed: totalWorkingDaysPassed,
+        remainingWorkingDays: Math.max(0, totalWorkingDaysInMonth - totalWorkingDaysPassed),
         presentDays,
         halfDays,
         absentDays,
-        paidLeave,
-        unpaidLeave,
-        holidays: holidayCount,
-
-        // ── Earnings ────────────────────────────────────
-        presentEarning,
-        halfDayEarning,
-        paidLeaveEarning,
-        grossEarnings,
-
-        // ── Structure ───────────────────────────────────
-        salaryStructure,
-
-        // ── Statutory ───────────────────────────────────
-        statutoryDeductions,
-        totalStatutoryDeductions,
-
-        // ── Deductions ──────────────────────────────────
-        absentAmt,
-        halfDayDeduct,
-        unpaidLeaveAmt,
+        lopDays,
+        lopAmount,
+        absentAmt: 0,
+        paidLeave: payrollData.actualLeaveDays || 0,
+        halfDayDeduct: 0,
+        unpaidLeaveAmt: 0,
         totalAttendanceDeductions,
-        deductions: totalDeductions,
-
-        // ── Final ───────────────────────────────────────
-        netSalary,
+        grossEarnings,
+        salaryStructure: resultStructure,
+        statutoryDeductions: {
+            pf: {
+                enabled: pfEnabled,
+                amount: pf,
+                percent: deductions.pf?.percent || 12,
+                label: "Provident Fund",
+                pfNumber: user.salary?.deductions?.pf?.pfNumber || ""
+            },
+            esi: {
+                enabled: deductions.esi?.enabled || false,
+                amount: esi,
+                percent: deductions.esi?.percent || 0.75,
+                label: "ESI",
+                esiNumber: user.salary?.deductions?.esi?.esiNumber || ""
+            },
+            professionalTax: {
+                enabled: deductions.professionalTax?.enabled || false,
+                amount: pt,
+                fixedAmount: deductions.professionalTax?.fixedAmount || 0,
+                label: "Professional Tax"
+            },
+            tds: {
+                amount: tds,
+                label: "Income Tax (TDS)",
+                annualGross: taxProj.annualGross,
+                standardDeduction: taxProj.standardDeduction,
+                taxableIncome: taxProj.taxableIncome,
+                annualTax: taxProj.annualTax,
+                effectiveRate: taxProj.effectiveRate
+            }
+        },
+        totalStatutoryDeductions: totalStatutory,
+        totalAttendanceDeductions,
+        deductions: round2(totalAttendanceDeductions + totalStatutory),
+        employerContributions: { gratuity },
+        netSalary
     };
 };
 

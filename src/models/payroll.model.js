@@ -32,6 +32,16 @@ const payrollSchema = new mongoose.Schema(
             pf: { enabled: Boolean, percent: Number, amount: Number, label: String, pfNumber: String },
             esi: { enabled: Boolean, percent: Number, amount: Number, label: String, esiNumber: String },
             professionalTax: { enabled: Boolean, fixedAmount: Number, amount: Number, label: String },
+            tds: { 
+                amount: Number, 
+                label: String,
+                // Projection data (Source of Truth)
+                annualGross: Number,
+                standardDeduction: Number,
+                taxableIncome: Number,
+                annualTax: Number,
+                effectiveRate: Number
+            },
         },
         totalStatutoryDeductions: { type: Number, default: 0 },
 

@@ -202,6 +202,11 @@ const userSchema = new mongoose.Schema(
             default: Date.now,
         },
 
+        relievingDate: {
+            type: Date,
+            default: null,
+        },
+
         employmentType: {
             type: String,
             enum: ["full-time", "part-time", "intern", "contract"],
@@ -230,11 +235,29 @@ const userSchema = new mongoose.Schema(
 
             // ── Salary Structure (HR configures per employee) ──
             structure: {
-                basic: { enabled: { type: Boolean, default: true }, percent: { type: Number, default: 50 } },
-                hra: { enabled: { type: Boolean, default: true }, percent: { type: Number, default: 20 } },
-                specialAllowance: { enabled: { type: Boolean, default: true }, percent: { type: Number, default: 10 } },
-                conveyance: { enabled: { type: Boolean, default: true }, percent: { type: Number, default: 15 } },
-                otherAllowance: { enabled: { type: Boolean, default: true }, percent: { type: Number, default: 5 } },
+                basic: {
+                    enabled: { type: Boolean, default: true },
+                    percent: { type: Number, default: 50 }
+                },
+                hra: {
+                    enabled: { type: Boolean, default: true },
+                    type: { type: String, enum: ["metro", "non-metro", "custom"], default: "non-metro" },
+                    percent: { type: Number, default: 40 } // Used for 'custom', or as default
+                },
+                specialAllowance: {
+                    enabled: { type: Boolean, default: true },
+                    autoCalculated: { type: Boolean, default: true }
+                },
+                conveyance: {
+                    enabled: { type: Boolean, default: true },
+                    type: { type: String, enum: ["fixed", "percent"], default: "percent" },
+                    value: { type: Number, default: 15 }
+                },
+                otherAllowance: {
+                    enabled: { type: Boolean, default: true },
+                    type: { type: String, enum: ["fixed", "percent"], default: "percent" },
+                    value: { type: Number, default: 5 }
+                },
             },
 
             // ── Deductions (HR enables/configures per employee) ──
@@ -243,13 +266,18 @@ const userSchema = new mongoose.Schema(
                     enabled: { type: Boolean, default: false },
                     percent: { type: Number, default: 12 },
                     pfNumber: { type: String, default: "", trim: true },
+                    pfMode: { type: String, enum: ["actual", "capped"], default: "actual" } // "capped" means max 12% of 15000 = 1800
                 },
                 esi: {
                     enabled: { type: Boolean, default: false },
                     percent: { type: Number, default: 0.75 },
                     esiNumber: { type: String, default: "", trim: true },
                 },
-                professionalTax: { enabled: { type: Boolean, default: false }, fixedAmount: { type: Number, default: 0 } },
+                professionalTax: {
+                    enabled: { type: Boolean, default: false },
+                    fixedAmount: { type: Number, default: 0 },
+                    state: { type: String, default: "UP" }
+                },
             },
         },
 
@@ -311,10 +339,66 @@ const userSchema = new mongoose.Schema(
             type: Boolean,
             default: false,
         },
+        isDeleted: {
+            type: Boolean,
+            default: false,
+            index: true,
+        },
+
+        deletedAt: {
+            type: Date,
+            default: null,
+        },
+
+        deletedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
+            default: null,
+        },
         shiftReminderEmail: {
             type: Boolean,
             default: true,
         },
+
+        // ─── Approved Devices ─────────────────────────────────────────────────
+        approvedDevices: [
+            {
+                deviceToken: { type: String, required: true },
+                deviceUUID: { type: String, default: "" },
+                productId: { type: String, default: "" },
+                hostname: { type: String, default: "" },
+                os: { type: String, default: "" },
+                label: { type: String, default: "" },
+                approvedBy: {
+                    type: mongoose.Schema.Types.ObjectId,
+                    ref: "User",
+                    default: null,
+                },
+                approvedAt: { type: Date, default: Date.now },
+                lastUsedAt: { type: Date, default: null },
+            }
+        ],
+
+        workLocation: {
+            type: String,
+            enum: ["office", "wfh"],
+            default: "office",
+        },
+        workLocationUpdatedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
+            default: null,
+        },
+        workLocationUpdatedAt: {
+            type: Date,
+            default: null,
+        },
+        workLocationConfig: {
+            startDate: { type: Date, default: null },
+            endDate: { type: Date, default: null },
+            reason: { type: String, default: "" },
+        },
+
         sessions: [
             {
                 sessionId: { type: String, required: true },

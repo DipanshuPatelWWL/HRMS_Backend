@@ -140,6 +140,22 @@ const attendanceSchema = new mongoose.Schema(
             type: Boolean,
             default: false,
         },
+        mpoFlag: {
+            type: Boolean,
+            default: false,
+        },
+        mpoDetectedAt: {
+            type: Date,
+            default: null,
+        },
+        mpoResolved: {
+            type: Boolean,
+            default: false,
+        },
+        halfDayReason: {
+            type: String,
+            default: "",
+        },
     },
     {
         timestamps: true,

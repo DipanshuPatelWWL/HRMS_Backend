@@ -13,6 +13,7 @@ const {
     getMyPayrolls,
     getPayroll,
     getPayrollStats,
+    getSalaryPreview,
     releasePayroll
 } = require("../controllers/payroll.controller");
 
@@ -32,6 +33,13 @@ router.get(
     protect,
     allowRoles("hr", "manager", "superadmin"),
     getPayrollStats
+);
+
+router.get(
+    "/preview",
+    protect,
+    allowRoles("hr", "manager", "superadmin", "employee"),
+    getSalaryPreview
 );
 
 // List all payrolls (with optional month/year/status filter)

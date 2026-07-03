@@ -21,7 +21,7 @@ const correctionSchema = new mongoose.Schema(
         // ── What correction is requested ──────────────────────────────
         type: {
             type: String,
-            enum: ["punch_in", "punch_out", "both"],
+            enum: ["punch_in", "punch_out", "both", "MPO"],
             required: true,
         },
 
@@ -39,6 +39,9 @@ const correctionSchema = new mongoose.Schema(
         originalPunchIn: { type: Date, default: null },
         originalPunchOut: { type: Date, default: null },
 
+        oldStatus: { type: String, default: "" },
+        newStatus: { type: String, default: "" },
+
         // ── Decision ──────────────────────────────────────────────────
         status: {
             type: String,
@@ -54,6 +57,14 @@ const correctionSchema = new mongoose.Schema(
         },
         actionDate: { type: Date, default: null },
         hrRemark: { type: String, default: "", trim: true },
+
+        rejectedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
+            default: null,
+        },
+        rejectedAt: { type: Date, default: null },
+        rejectionReason: { type: String, default: "" },
 
         // ── Reference to the attendance record that was patched ────────
         // (set at approval time so we always know which doc changed)

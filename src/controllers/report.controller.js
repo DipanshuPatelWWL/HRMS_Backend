@@ -5,8 +5,8 @@ const User = require("../models/user.model");
 const Recruitment = require("../models/recruitment.model");
 const Performance = require("../models/performance.model");
 const Training = require("../models/training.model");
+const attendanceService = require("../utils/attendanceService");
 const moment = require("moment-timezone");
-
 
 const getAttendanceReport = async (req, res) => {
     try {
@@ -120,27 +120,112 @@ const getEmployeeStats = async (req, res) => {
 
 const getMyDashboardStats = async (req, res) => {
     try {
+
         const userId = req.user._id;
 
-        const attendance = await Attendance.find({ user: userId });
-        const present = attendance.filter(a => a.status === "present").length;
-        const total = attendance.length;
-        const percentage = total ? ((present / total) * 100).toFixed(1) : 0;
-        const lateDays = attendance.filter(a => a.isLate).length;
+        const now = moment().tz("Asia/Kolkata");
 
-        const leaves = await Leave.find({ user: userId, status: "approved" });
-        const leaveCount = leaves.length;
+        const startOfMonth = now.clone().startOf("month");
+
+        const endOfMonth = now.clone().endOf("month");
+
+        const todayString = now.format("YYYY-MM-DD");
+
+        const [
+            grid,
+            todayAttendance,
+            pendingLeaves,
+            user
+        ] = await Promise.all([
+
+            attendanceService.getAttendanceGrid(
+                userId,
+                startOfMonth.toDate(),
+                endOfMonth.toDate()
+            ),
+
+            Attendance.findOne({
+                user: userId,
+                dateString: todayString,
+            }).lean(),
+
+            Leave.countDocuments({
+                user: userId,
+                status: "pending",
+            }),
+
+            User.findById(userId)
+                .select("name employeeId department designation shift")
+                .lean(),
+
+        ]);
+
+        const stats = attendanceService.calculateStats(grid);
 
         res.json({
             success: true,
             data: {
-                attendancePercentage: percentage,
-                leavesTaken: leaveCount,
-                lateDays,
+
+                employee: {
+                    name: user.name,
+                    employeeId: user.employeeId,
+                    department: user.department,
+                    designation: user.designation,
+                },
+
+                attendancePercentage: stats.attendancePercentage,
+
+                leavesTaken: stats.leave,
+
+                lateDays: stats.late,
+
+                presentDays:
+                    stats.present +
+                    stats.late +
+                    stats.halfDay,
+
+                absentDays: stats.absent,
+
+                workingDays: stats.workingDays,
+
+                workedDays: stats.workedDays,
+
+                totalWorkHours: stats.totalWorkHours,
+
+                avgDailyHours: stats.avgDailyHours,
+
+                pendingLeaves,
+
+                today: {
+
+                    status: todayAttendance
+                        ? todayAttendance.punchOut
+                            ? "Completed"
+                            : "Working"
+                        : "Not Started",
+
+                    punchIn: todayAttendance?.punchIn || null,
+
+                    punchOut: todayAttendance?.punchOut || null,
+
+                    workHours:
+                        todayAttendance?.workHours || 0,
+
+                    shift: user.shift || null,
+
+                },
+
             },
+
         });
+
     } catch (err) {
-        res.status(500).json({ success: false, message: err.message });
+
+        res.status(500).json({
+            success: false,
+            message: err.message,
+        });
+
     }
 };
 
@@ -299,7 +384,7 @@ const getHRDashboardStats = async (req, res) => {
             if (u.dob) {
                 const bday = moment.tz(u.dob, "Asia/Kolkata");
                 const thisYear = bday.clone().year(nowIST.year());
-                
+
                 if (thisYear.isBefore(nowIST, "day")) {
                     thisYear.add(1, "year");
                 }
@@ -319,14 +404,14 @@ const getHRDashboardStats = async (req, res) => {
             if (u.joiningDate) {
                 const jDate = moment.tz(u.joiningDate, "Asia/Kolkata");
                 const anniv = jDate.clone().year(nowIST.year());
-                
+
                 if (anniv.isBefore(nowIST, "day")) {
                     anniv.add(1, "year");
                 }
 
                 const diff = anniv.diff(nowIST.clone().startOf("day"), "days");
                 const years = anniv.year() - jDate.year();
-                
+
                 if (diff >= 0 && diff <= 7 && years > 0) {
                     upcoming.push({
                         name: u.name,

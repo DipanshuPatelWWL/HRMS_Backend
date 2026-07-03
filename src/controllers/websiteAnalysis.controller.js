@@ -2,7 +2,6 @@
 const axios = require("axios");
 const LeadIntelligence = require("../models/leadIntelligence.model");
 const PYTHON_URL = process.env.PYTHON_SERVICE_URL || "http://localhost:8000";
-console.log("PYTHON_URL =", PYTHON_URL);
 
 exports.analyzeWebsite = async (req, res) => {
     try {

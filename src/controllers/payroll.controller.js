@@ -1,12 +1,18 @@
 const Payroll = require("../models/payroll.model");
+const PayrollSettings = require("../models/payrollSettings.model");
 const User = require("../models/user.model");
 const Attendance = require("../models/attendance.model");
 const Holiday = require("../models/holiday.model");
 const Leave = require("../models/leave.model");
-const { createNotification } = require("./notification.controller");
 const { calculateSalary } = require("../utils/salary/salaryEngine");
 const moment = require("moment-timezone");
+const { notifyPersonalPayslip } = require("../services/emailNotify");
+const { createNotification } = require("./notification.controller");
 
+const MONTHS = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+];
 // ─────────────────────────────────────────────
 //  HELPER
 // ─────────────────────────────────────────────
@@ -14,36 +20,6 @@ const isWeekend = (date) => {
     const d = moment(date).tz("Asia/Kolkata").day();
     return d === 0 || d === 6;
 };
-
-// ─────────────────────────────────────────────
-//  BUILD SALARY DATA
-//
-//  FORMULA:
-//    perDay      = monthlySalary / totalCalendarDays  (28 / 30 / 31)
-//    halfDayPay  = perDay / 2
-//
-//    deductions  = (absentDays  × perDay)
-//                + (halfDays    × halfDayPay)
-//                + (unpaidLeave × perDay)
-//
-//    netSalary   = monthlySalary - deductions
-//
-//  POLICY:
-//    • Full attendance          → full salary (no deduction)
-//    • Weekends + holidays      → no deduction (implicit in full salary)
-//    • Paid casual leave (CL)   → no deduction
-//    • Absent working day       → deduct perDay
-//    • Half day                 → deduct halfDayPay
-//    • Unpaid / sick / earned   → deduct perDay per day
-//
-//  EXAMPLE (30-day month, salary 8000):
-//    perDay = 8000 / 30 = 266.67
-//    2 absent → 266.67 × 2 = 533.34 deducted
-//    net = 8000 - 533.34 = 7466.66 
-// ─────────────────────────────────────────────
-
-
-
 
 function round2(n) {
     return Math.round(n * 100) / 100;
@@ -53,7 +29,52 @@ function round2(n) {
 //  GENERATE PAYROLL  (HR)
 // ─────────────────────────────────────────────
 const generatePayroll = async (req, res) => {
+    let lockedSettings = null;
+    const MAX_LOCK_AGE = 30 * 60 * 1000; // 30 minutes
+    const now = new Date();
+    const staleThreshold = new Date(now.getTime() - MAX_LOCK_AGE);
+
     try {
+        // 1. Atomic Lock check & acquire (handles fresh locks and stale locks)
+        lockedSettings = await PayrollSettings.findOneAndUpdate(
+            {
+                singletonKey: "singleton",
+                $or: [
+                    { isGeneratingPayroll: false },
+                    { isGeneratingPayroll: true, lockAcquiredAt: { $lte: staleThreshold } },
+                    { isGeneratingPayroll: true, lockAcquiredAt: null } // Handle corrupt/legacy states safely
+                ]
+            },
+            {
+                $set: {
+                    isGeneratingPayroll: true,
+                    lockAcquiredAt: now
+                }
+            },
+            { new: true }
+        );
+
+        if (!lockedSettings) {
+            // Either the job is running (and not stale) OR the singleton doesn't exist
+            const anySettings = await PayrollSettings.findOne({ singletonKey: "singleton" });
+            if (!anySettings) {
+                try {
+                    lockedSettings = await PayrollSettings.create({
+                        singletonKey: "singleton",
+                        isGeneratingPayroll: true,
+                        lockAcquiredAt: now
+                    });
+                } catch (err) {
+                    if (err.code === 11000) {
+                        return res.status(429).json({ success: false, message: "A payroll generation job is already in progress. Please wait." });
+                    }
+                    throw err;
+                }
+            } else {
+                return res.status(429).json({ success: false, message: "A payroll generation job is already in progress. Please wait." });
+            }
+        }
+
         const { month, year, employeeId } = req.body;
         const io = req.app.get("io");
 
@@ -64,6 +85,21 @@ const generatePayroll = async (req, res) => {
         const m = parseInt(month);
         const y = parseInt(year);
 
+        const nowIST = moment().tz("Asia/Kolkata");
+        const currentMonth = nowIST.month() + 1;
+        const currentYear = nowIST.year();
+
+        // if (y > currentYear || (y === currentYear && m > currentMonth)) {
+        //     return res.status(400).json({ success: false, message: "Cannot generate payroll for future months." });
+        // }
+
+        // if (y === currentYear && m === currentMonth) {
+        //     const lastDay = nowIST.clone().endOf("month").date();
+        //     if (nowIST.date() < lastDay) {
+        //         return res.status(400).json({ success: false, message: "Final payroll for the current month can only be generated on the last day of the month. Please use the Salary Preview feature until then." });
+        //     }
+        // }
+
         let users;
         if (employeeId) {
             const u = await User.findById(employeeId);
@@ -72,7 +108,7 @@ const generatePayroll = async (req, res) => {
         } else {
             users = await User.find({
                 status: "active",
-                role: { $in: ["employee", "tl", "manager"] },
+                role: { $in: ["employee", "tl"] },
                 "salary.monthly": { $gt: 0 },
             });
         }
@@ -89,7 +125,10 @@ const generatePayroll = async (req, res) => {
                     continue;
                 }
 
-                const data = await calculateSalary(user._id, m, y);
+                const isCurrentMonth = (m === nowIST.month() + 1 && y === nowIST.year());
+                const mode = isCurrentMonth ? "earned" : "final";
+
+                const data = await calculateSalary(user._id, m, y, mode);
                 if (!data) {
                     skipped.push({ name: user.name, reason: "No salary configured" });
                     continue;
@@ -107,20 +146,12 @@ const generatePayroll = async (req, res) => {
 
                 results.push(payroll);
 
-                const monthName = moment.tz({ year: y, month: m - 1 }, "Asia/Kolkata")
-                    .format("MMMM");
-
-                await createNotification(
-                    io,
-                    user._id,
-                    "Payslip Generated 📄",
-                    `Your payslip for ${monthName} ${y} has been generated`,
-                    "payroll",
-                    { payrollId: payroll._id }
-                );
-
             } catch (err) {
-                errors.push({ name: user.name, error: err.message });
+                if (err.code === 11000) {
+                    skipped.push({ name: user.name, reason: "Duplicate generation attempt" });
+                } else {
+                    errors.push({ name: user.name, error: err.message });
+                }
             }
         }
 
@@ -136,6 +167,13 @@ const generatePayroll = async (req, res) => {
 
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
+    } finally {
+        if (lockedSettings) {
+            await PayrollSettings.updateOne(
+                { singletonKey: "singleton" },
+                { $set: { isGeneratingPayroll: false, lockAcquiredAt: null } }
+            );
+        }
     }
 };
 
@@ -151,14 +189,18 @@ const getAllPayrolls = async (req, res) => {
         if (status) filter.status = status;
 
         const payrolls = await Payroll.find(filter)
-            .populate(
-                "employee",
-                "name email employeeId guardianName fatherName parentName department designation role joiningDate dob salary bankDetails governmentId"
-            )
+            .populate({
+                path: "employee",
+                match: { role: { $nin: ["manager", "superadmin"] } },
+                select: "name email employeeId guardianName fatherName parentName department designation role joiningDate dob salary bankDetails governmentId"
+            })
             .populate("paidBy", "name")
             .sort({ year: -1, month: -1, createdAt: -1 });
 
-        res.json({ success: true, count: payrolls.length, payrolls });
+        // Filter out records where employee population failed (Manager/SuperAdmin)
+        const filteredPayrolls = payrolls.filter(p => p.employee);
+
+        res.json({ success: true, count: filteredPayrolls.length, payrolls: filteredPayrolls });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -173,7 +215,7 @@ const markAsPaid = async (req, res) => {
         const { remarks } = req.body;
         const io = req.app.get("io");
 
-        const payroll = await Payroll.findById(id).populate("employee", "name _id");
+        const payroll = await Payroll.findById(id).populate("employee", "name email _id");
         if (!payroll) return res.status(404).json({ success: false, message: "Payroll not found" });
 
         if (payroll.status === "paid") {
@@ -192,17 +234,28 @@ const markAsPaid = async (req, res) => {
 
         await payroll.save();
 
-        const monthName = moment.tz({ year: payroll.year, month: payroll.month - 1 }, "Asia/Kolkata")
-            .format("MMMM");
+        // ── Notify this employee only ──
+        const emp = payroll.employee;
+        if (emp) {
+            createNotification(
+                io,
+                emp._id,
+                "Salary Credited 💵",
+                `Your salary for ${MONTHS[payroll.month - 1]} ${payroll.year} has been processed. Net pay: ₹${(payroll.netSalary || 0).toLocaleString("en-IN")}`,
+                "payroll",
+                { payrollId: payroll._id, month: payroll.month, year: payroll.year }
+            ).catch(err => console.error("Notification error:", err));
 
-        await createNotification(
-            io,
-            payroll.employee._id,
-            "Salary Paid 💰",
-            `Your salary of ₹${payroll.netSalary.toLocaleString()} for ${monthName} ${payroll.year} has been paid`,
-            "payroll",
-            { payrollId: payroll._id }
-        );
+            if (emp.email) {
+                notifyPersonalPayslip(emp.email, {
+                    employeeName: emp.name,
+                    month: payroll.month,
+                    year: payroll.year,
+                    netSalary: payroll.netSalary,
+                    payslipUrl: null,
+                }).catch(err => console.error("Email error:", err));
+            }
+        }
 
         res.json({ success: true, message: "Marked as paid", payroll });
     } catch (error) {
@@ -221,7 +274,7 @@ const bulkMarkPaid = async (req, res) => {
         if (!ids?.length) return res.status(400).json({ success: false, message: "ids array required" });
 
         const payrolls = await Payroll.find({ _id: { $in: ids }, status: "draft" })
-            .populate("employee", "name _id");
+            .populate("employee", "name email _id");
 
         let count = 0;
         for (const p of payrolls) {
@@ -238,17 +291,28 @@ const bulkMarkPaid = async (req, res) => {
             await p.save();
             count++;
 
-            const monthName = moment.tz({ year: p.year, month: p.month - 1 }, "Asia/Kolkata")
-                .format("MMMM");
+            // ── Notify each selected employee individually ──
+            const emp = p.employee;
+            if (emp) {
+                createNotification(
+                    io,
+                    emp._id,
+                    "Salary Credited 💵",
+                    `Your salary for ${MONTHS[p.month - 1]} ${p.year} has been processed. Net pay: ₹${(p.netSalary || 0).toLocaleString("en-IN")}`,
+                    "payroll",
+                    { payrollId: p._id, month: p.month, year: p.year }
+                ).catch(err => console.error(`Notification error for ${emp.name}:`, err));
 
-            await createNotification(
-                io,
-                p.employee._id,
-                "Salary Paid 💰",
-                `Your salary of ₹${p.netSalary.toLocaleString()} for ${monthName} ${p.year} has been paid`,
-                "payroll",
-                { payrollId: p._id }
-            );
+                if (emp.email) {
+                    notifyPersonalPayslip(emp.email, {
+                        employeeName: emp.name,
+                        month: p.month,
+                        year: p.year,
+                        netSalary: p.netSalary,
+                        payslipUrl: null,
+                    }).catch(err => console.error(`Email error for ${emp.name}:`, err));
+                }
+            }
         }
 
         res.json({ success: true, message: `${count} payroll(s) marked as paid` });
@@ -342,6 +406,11 @@ const getPayrollStats = async (req, res) => {
         if (month) filter.month = parseInt(month);
         if (year) filter.year = parseInt(year);
 
+        const validEmployees = await User.find({ role: { $nin: ["manager", "superadmin"] } }).select("_id").lean();
+        const validIds = validEmployees.map(u => u._id);
+
+        filter.employee = { $in: validIds };
+
         const all = await Payroll.find(filter);
         const paid = all.filter(p => p.status === "paid");
         const draft = all.filter(p => p.status === "draft");
@@ -366,6 +435,54 @@ const getPayrollStats = async (req, res) => {
     }
 };
 
+
+const getSalaryPreview = async (req, res) => {
+    try {
+        const { employeeId, month, year } = req.query;
+
+        if (!employeeId || !month || !year) {
+            return res.status(400).json({ success: false, message: "employeeId, month and year are required" });
+        }
+
+        const isAdmin = ["hr", "manager", "superadmin"].includes(req.user.role);
+        if (employeeId !== req.user._id.toString() && !isAdmin) {
+            return res.status(403).json({ success: false, message: "Unauthorized salary preview" });
+        }
+
+        const m = parseInt(month);
+        const y = parseInt(year);
+
+        const earned = await calculateSalary(employeeId, m, y, "earned");
+        const projected = await calculateSalary(employeeId, m, y, "projected");
+
+        if (!earned || !projected) {
+            return res.status(404).json({ success: false, message: "No salary configuration found for this employee or user not found" });
+        }
+
+        res.json({
+            success: true,
+            preview: {
+                monthlySalary: earned.monthlySalary,
+                presentDays: earned.presentDays,
+                absentDays: earned.absentDays,
+                attendanceDeductions: earned.totalAttendanceDeductions,
+
+                // Value Rename: represents actual earned amount till today
+                earnedTillDate: earned.grossEarnings,
+
+                // Projections for month end
+                projectedMonthEndGross: projected.grossEarnings,
+                projectedMonthEndTDS: projected.statutoryDeductions.tds.amount,
+                projectedMonthEndNet: projected.netSalary,
+
+                // Useful for UI badges
+                isCurrentMonth: (new Date().getMonth() + 1 === m && new Date().getFullYear() === y)
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 const releasePayroll = async (req, res) => {
     try {
@@ -397,5 +514,6 @@ module.exports = {
     getMyPayrolls,
     getPayroll,
     getPayrollStats,
+    getSalaryPreview,
     releasePayroll
 };

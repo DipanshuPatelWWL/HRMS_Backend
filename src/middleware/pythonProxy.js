@@ -18,13 +18,13 @@ const checkPythonService = async () => {
     try {
         const res = await pythonClient.get("/health");
         if (res.data?.status === "ok") {
-            console.log("✅ Python Lead Engine connected →", PYTHON_URL);
+            console.log("Python Lead Engine connected →", PYTHON_URL);
         }
     } catch (err) {
         if (err.response?.status === 403) {
-            console.error("❌ Python Lead Engine authentication failed — check PYTHON_ENGINE_API_KEY");
+            console.error("Python Lead Engine authentication failed — check PYTHON_ENGINE_API_KEY");
         } else {
-            console.warn("⚠️  Python Lead Engine not reachable at", PYTHON_URL, "— start it before using lead generation.");
+            console.warn("Python Lead Engine not reachable at", PYTHON_URL, "— start it before using lead generation.");
         }
     }
 };

@@ -3,6 +3,8 @@ const express = require("express");
 const cors = require("cors");
 const http = require("http");
 const jwt = require("jsonwebtoken");
+const helmet = require("helmet");
+const rateLimit = require("express-rate-limit");
 
 const { Server } = require("socket.io");
 
@@ -12,7 +14,7 @@ const userRoutes = require("./routes/user.routes");
 const attendanceRoutes = require("./routes/attendance.routes");
 const leaveRoutes = require("./routes/leave.routes");
 const payrollRoutes = require("./routes/payroll.routes");
-const reportRoutes = require("./routes/report.routes");
+const payrollSettingsRoutes = require("./routes/payrollSettings.routes");
 const notificationRoutes = require("./routes/notification.routes");
 const taskRoutes = require("./routes/task.routes");
 const ticketRoutes = require("./routes/ticket.routes");
@@ -24,11 +26,11 @@ const PublicRoutes = require("./routes/publicRoutes");
 const SalesReportRoutes = require("./routes/sales.report.routes");
 const celebrationRoutes = require("./routes/celebration.routes");
 const celebrationTemplateRoutes = require("./routes/celebrationTemplate.routes");
-const AIRoutes = require("./routes/ai.routes");
-const HRAIRoutes = require("./routes/hr.ai.routes");
 const DailyReportRoutes = require("./routes/dailyReports.routes");
+const reportRoutes = require("./routes/report.routes");
 const AssetsRoutes = require("./routes/assetRoutes");
 const PolicyRoutes = require("./routes/policy.routes");
+const deviceApprovalRoutes = require("./routes/deviceApproval.route");
 const isProd = process.env.NODE_ENV === "production";
 
 //python advance sales
@@ -45,11 +47,22 @@ const ALLOWED_ORIGINS = isProd
     ]
     : [
         "http://localhost:5173",
-        "http://localhost:5174",
+        "http://localhost:5174"
     ];
 
 const app = express();
 const server = http.createServer(app);
+
+// 🔐 SECURITY HEADERS & RATE LIMITING
+app.use(helmet());
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 100,
+    message: "Too many attempts, please try again after 15 minutes",
+});
+app.use("/api/auth/login", authLimiter);
+app.use("/api/auth/signup", authLimiter);
+
 if (isProd) {
     app.set("trust proxy", "127.0.0.1");
 } else {
@@ -68,43 +81,16 @@ app.use(cors({
     credentials: true,
 }));
 
-app.use(express.json({ limit: "50mb" }));
-app.use(express.urlencoded({ limit: "50mb", extended: true }));
-
-
-app.use((req, res, next) => {
-    const start = Date.now();
-
-    res.on("finish", () => {
-        const duration = Date.now() - start;
-
-        if (duration > 1000) {
-            console.log(
-                `🔴 VERY SLOW [${res.statusCode}] ${req.method} ${req.originalUrl} - ${duration}ms`
-            );
-        } else if (duration > 500) {
-            console.log(
-                `🟡 SLOW [${res.statusCode}] ${req.method} ${req.originalUrl} - ${duration}ms`
-            );
-        } else {
-            console.log(
-                `🟢 FAST [${res.statusCode}] ${req.method} ${req.originalUrl} - ${duration}ms`
-            );
-        }
-    });
-
-    next();
-});
-
-
+app.use(express.json({ limit: "1mb" }));
+app.use(express.urlencoded({ limit: "1mb", extended: true }));
 
 app.use((req, res, next) => {
     res.setHeader("Connection", "keep-alive");
     next();
 });
 app.use("/uploads", express.static("uploads"));
-
 app.use("/updates", express.static("updates"));
+
 const io = new Server(server, {
     cors: {
         origin: (origin, callback) => {
@@ -125,10 +111,7 @@ const io = new Server(server, {
 io.use((socket, next) => {
     try {
         const token = socket.handshake.auth?.token;
-
-        if (!token) {
-            return next(new Error("Unauthorized: No token"));
-        }
+        if (!token) return next(new Error("Unauthorized: No token"));
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
         socket.user = decoded;
         next();
@@ -138,9 +121,6 @@ io.use((socket, next) => {
 });
 
 io.on("connection", (socket) => {
-    console.log("User connected");
-
-    // Auto-join from JWT — covers every field name your JWT might use
     const uid = socket.user?.id || socket.user?._id || socket.user?.userId;
     if (uid) {
         const uidStr = uid.toString();
@@ -154,49 +134,51 @@ io.on("connection", (socket) => {
     }
 
     socket.on("join:hr_room", () => {
-        socket.join("hr_room");
-    });
-
-    socket.on("join:user_room", (data) => {
-        const userId = (typeof data === "object" ? data?.userId : data)?.toString();
-        if (!userId) return;
-        socket.join(`user_${userId}`);
-        socket.join(userId);
-    });
-
-    socket.on("join", (room) => {
-        if (typeof room === "string" && room.length < 100) {
-            socket.join(room);
+        if (allowedRoles.includes(socket.user?.role)) {
+            socket.join("hr_room");
+        } else {
+            socket.emit("error", { message: "Unauthorized: HR role required" });
         }
     });
 
-    // HR starts watching an employee's live stream
+    socket.on("join:user_room", (data) => {
+        const targetUserId = (typeof data === "object" ? data?.userId : data)?.toString();
+        if (!targetUserId) return;
+        const isSelf = targetUserId === (socket.user?.id || socket.user?._id || socket.user?.userId)?.toString();
+        const isAdmin = allowedRoles.includes(socket.user?.role);
+        if (isSelf || isAdmin) {
+            socket.join(`user_${targetUserId}`);
+            socket.join(targetUserId);
+        } else {
+            socket.emit("error", { message: "Unauthorized to join this user room" });
+        }
+    });
+
     socket.on("stream:request", ({ targetUserId }) => {
+        if (!allowedRoles.includes(socket.user?.role)) {
+            return socket.emit("error", { message: "Unauthorized: Stream request denied" });
+        }
         const streamId = `${targetUserId}_${Date.now()}`;
         io.to(`user_${targetUserId}`).emit("stream:start", { streamId });
-        io.to(targetUserId.toString()).emit("stream:start", { streamId });
         socket.emit("stream:started", { streamId, targetUserId });
     });
 
-    // HR stops watching
     socket.on("stream:stop_request", ({ targetUserId }) => {
+        if (!allowedRoles.includes(socket.user?.role)) return;
         io.to(`user_${targetUserId}`).emit("stream:stop");
-        io.to(targetUserId.toString()).emit("stream:stop");
     });
 
     socket.on("stream:frame", (data) => {
-        io.to("hr_room").emit("stream:frame", data);
+        if (allowedRoles.includes(socket.user?.role)) {
+            io.to("hr_room").emit("stream:frame", data);
+        }
     });
 
-    socket.on("disconnect", () => {
-        console.log("User disconnected");
-    });
+    socket.on("disconnect", () => { });
 });
 
-// Make io available in controllers
 app.set("io", io);
 
-// 🌐 ROUTES
 app.get("/", (req, res) => {
     res.send("Employee Management API Running...");
 });
@@ -206,6 +188,7 @@ app.use("/api/users", userRoutes);
 app.use("/api/attendance", attendanceRoutes);
 app.use("/api/leave", leaveRoutes);
 app.use("/api/payroll", payrollRoutes);
+app.use("/api/settings/payroll", payrollSettingsRoutes);
 app.use("/api/reports", reportRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/tickets", ticketRoutes);
@@ -218,16 +201,12 @@ app.use("/api", PublicRoutes);
 app.use("/api", SalesReportRoutes);
 app.use("/api/celebrations", celebrationRoutes);
 app.use("/api/celebrationTemplate", celebrationTemplateRoutes);
-app.use("/api/ai", AIRoutes);
-app.use("/api/hr-ai", HRAIRoutes);
 app.use("/api", DailyReportRoutes);
 app.use("/api/assets", AssetsRoutes);
 app.use("/api/policies", PolicyRoutes);
-
-// -------------------------tracker route ------------------------------------
 app.use("/api/activity-monitor", activityMonitorRoutes);
-
-// -------------------------python advance sales route ------------------------------------
 app.use("/api/intelligence", salesIntelligenceRoutes);
 app.use("/api/intelligence/follow-ups", followUpRoutes);
+app.use("/api/device-approvals", deviceApprovalRoutes);
+
 module.exports = { app, server };

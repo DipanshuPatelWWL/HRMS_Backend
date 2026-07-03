@@ -15,7 +15,6 @@ const {
     getSingleUser,
     updateUser,
     deleteUser,
-    debugUsers,
     updateMyProfile,
     changeMyPassword,
     uploadAvatar,
@@ -35,12 +34,11 @@ const {
     updateEmployeeShift,
     bulkUpdateShift,
     getLeaveBalance,
-    manageShiftReminder
+    manageShiftReminder,
+    getArchivedEmployees,
+    getTerminatedEmployees,
+    getEmployeeHistory
 } = require("../controllers/user.controller");
-
-
-// ─── Debug ────────────────────────────────────────────────────────────────────
-router.get("/debug", debugUsers);
 
 
 // ─── Me routes (must be before /:id to avoid "me" being treated as an id) ────
@@ -66,6 +64,12 @@ router.post(
     uploadDocumentsMiddleware.single("document"),
     uploadEmployeeDocument
 );
+
+
+
+router.get("/archived", protect, allowRoles("hr", "manager"), getArchivedEmployees);
+router.get("/terminated", protect, allowRoles("hr", "manager"), getTerminatedEmployees);
+router.get("/:id/history", protect, allowRoles("hr", "manager", "tl"), getEmployeeHistory);
 
 
 
