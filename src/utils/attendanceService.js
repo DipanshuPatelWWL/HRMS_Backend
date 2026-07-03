@@ -31,16 +31,20 @@ const getAttendanceGrid = async (userId, startDate, endDate) => {
         User.findById(userId).select("joiningDate relievingDate createdAt shift").lean()
     ]);
 
+    console.log("================================");
+    console.log("Attendance Records:", attendance.length);
 
-    console.log("Attendance Count:", attendance.length);
-
-    attendance.forEach(a => {
-        console.log({
-            date: a.dateString,
-            status: a.status,
-            workHours: a.workHours
-        });
+    attendance.forEach((a) => {
+        console.log(
+            a.dateString +
+            " | status=" + a.status +
+            " | PI=" + !!a.punchIn +
+            " | PO=" + !!a.punchOut +
+            " | WH=" + a.workHours
+        );
     });
+
+    console.log("Creating Attendance Map...");
 
     const attMap = new Map(
         attendance.map((a) => [
@@ -48,19 +52,6 @@ const getAttendanceGrid = async (userId, startDate, endDate) => {
             a
         ])
     );
-
-    console.log("=================================");
-    console.log("Attendance Found :", attendance.length);
-
-    attendance.forEach((a) => {
-        console.log({
-            employee: a.user.toString(),
-            date: a.date,
-            dateString: a.dateString,
-            punchIn: a.punchIn,
-            status: a.status,
-        });
-    });
 
     const holidayMap = new Map(
         holidays.map((h) => [
@@ -158,6 +149,7 @@ const getAttendanceGrid = async (userId, startDate, endDate) => {
     }
 
     grid._shift = user?.shift;
+    console.log("Grid Days:", grid.length);
     return grid;
 };
 
@@ -165,6 +157,7 @@ const getAttendanceGrid = async (userId, startDate, endDate) => {
  * Calculates summary stats from an attendance grid.
  */
 const calculateStats = (grid) => {
+    console.log("========== CALCULATE STATS ==========");
     const stats = {
         present: 0,
         late: 0,
@@ -187,6 +180,13 @@ const calculateStats = (grid) => {
     stats.totalWorkHours = 0;
 
     grid.forEach(day => {
+        console.log(
+            day.dateString +
+            " | status=" + day.status +
+            " | PI=" + !!day.punchIn +
+            " | PO=" + !!day.punchOut +
+            " | WH=" + day.workHours
+        );
         // Only count stats for past and today
         if (day.dateString > todayStr) return;
         if (day.status === "not_joined" || day.status === "inactive") return;
@@ -246,6 +246,17 @@ const calculateStats = (grid) => {
     stats.compliancePercentage = stats.expectedShiftHours > 0
         ? parseFloat(((stats.avgDailyHours / stats.expectedShiftHours) * 100).toFixed(2))
         : 0;
+
+
+    console.log("========== FINAL STATS ==========");
+    console.log("Present:", stats.present);
+    console.log("Late:", stats.late);
+    console.log("HalfDay:", stats.halfDay);
+    console.log("Absent:", stats.absent);
+    console.log("Working Days:", stats.workingDays);
+    console.log("Completed Present Days:", stats.completedPresentDays);
+    console.log("Total Hours:", stats.totalWorkHours);
+    console.log("Average Hours:", stats.avgDailyHours);
 
     return stats;
 };
