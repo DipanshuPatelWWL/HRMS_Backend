@@ -17,7 +17,6 @@ const getAttendanceGrid = async (userId, startDate, endDate) => {
     const [attendance, holidays, leaves, user] = await Promise.all([
         Attendance.find({
             user: userId,
-            date: { $gte: start.toDate(), $lte: end.toDate() }
         }).lean(),
         Holiday.find({
             date: { $gte: start.toDate(), $lte: end.toDate() }
