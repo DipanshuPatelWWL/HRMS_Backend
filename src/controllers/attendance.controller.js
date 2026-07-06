@@ -149,11 +149,11 @@ const punchIn = async (req, res) => {
                         message: "Device token invalid or revoked. Please contact HR."
                     });
                 }
-            } else if (deviceUUID && productId) {
+            } else if (productId) {
                 // Fallback: agent hasn't persisted the token locally yet,
                 // but the hardware identity already matches an approved device.
                 matchedDevice = fullUser?.approvedDevices?.find(
-                    d => d.deviceUUID === deviceUUID && d.productId === productId
+                    d => d.productId === productId && (d.deviceUUID || "") === (deviceUUID || "")
                 );
             }
 
@@ -165,15 +165,26 @@ const punchIn = async (req, res) => {
                 verifiedBy = "device";
 
             } else {
-                return res.status(403).json({
-                    success: false,
-                    code: "DEVICE_NOT_APPROVED",
-                    message: "Device not approved. You can request approval from HR to punch in from this device.",
-                    device: {
-                        deviceUUID: deviceUUID || "",
-                        productId: productId || "",
-                    }
-                });
+                // ── Fallback: geofence verification ────────────────────
+                // Device isn't approved, but if the reported GPS location is
+                // within office radius, allow punch-in without an HR request.
+                const hasCoords = typeof lat === "number" && typeof lng === "number";
+                const distance = hasCoords ? getDistance(lat, lng, OFFICE_LAT, OFFICE_LNG) : null;
+                const withinGeofence = hasCoords && distance <= GEOFENCE_RADIUS;
+
+                if (withinGeofence) {
+                    verifiedBy = "location";
+                } else {
+                    return res.status(403).json({
+                        success: false,
+                        code: "DEVICE_NOT_APPROVED",
+                        message: "Device not approved and you're not within office range. You can request approval from HR to punch in from this device.",
+                        device: {
+                            deviceUUID: deviceUUID || "",
+                            productId: productId || "",
+                        }
+                    });
+                }
             }
         }
 
