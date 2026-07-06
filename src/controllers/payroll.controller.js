@@ -505,6 +505,47 @@ const releasePayroll = async (req, res) => {
     }
 };
 
+
+
+// ─────────────────────────────────────────────
+//  BULK RECALCULATE PAYROLL (HR — refresh all drafts for a month)
+// ─────────────────────────────────────────────
+const bulkRecalculatePayroll = async (req, res) => {
+    try {
+        const { month, year } = req.body || {};
+        if (!month || !year) {
+            return res.status(400).json({ success: false, message: "month and year are required" });
+        }
+
+        const drafts = await Payroll.find({ month: parseInt(month), year: parseInt(year), status: "draft" });
+        const nowIST = moment().tz("Asia/Kolkata");
+        const isCurrentMonth = (parseInt(month) === nowIST.month() + 1 && parseInt(year) === nowIST.year());
+        const mode = isCurrentMonth ? "earned" : "final";
+
+        let updated = 0;
+        const failed = [];
+
+        for (const p of drafts) {
+            try {
+                const data = await calculateSalary(p.employee, p.month, p.year, mode);
+                if (data) {
+                    Object.assign(p, data);
+                    await p.save();
+                    updated++;
+                } else {
+                    failed.push(p._id);
+                }
+            } catch (err) {
+                failed.push(p._id);
+            }
+        }
+
+        res.json({ success: true, message: `Recalculated ${updated} draft payroll(s)`, updated, failed });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = {
     generatePayroll,
     getAllPayrolls,
@@ -515,5 +556,7 @@ module.exports = {
     getPayroll,
     getPayrollStats,
     getSalaryPreview,
-    releasePayroll
+    releasePayroll,
+    bulkRecalculatePayroll,
+
 };

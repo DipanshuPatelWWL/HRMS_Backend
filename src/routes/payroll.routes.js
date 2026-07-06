@@ -14,7 +14,8 @@ const {
     getPayroll,
     getPayrollStats,
     getSalaryPreview,
-    releasePayroll
+    releasePayroll,
+    bulkRecalculatePayroll
 } = require("../controllers/payroll.controller");
 
 // ── Employee ─────────────────────────────────────────────
@@ -71,6 +72,14 @@ router.put(
     protect,
     allowRoles("hr", "manager", "superadmin"),
     markAsPaid
+);
+
+
+router.put(
+    "/bulk-recalculate",
+    protect,
+    allowRoles("hr", "manager", "superadmin"),
+    bulkRecalculatePayroll
 );
 
 // Delete draft payroll
