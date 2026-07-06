@@ -17,17 +17,17 @@ const OFFICE_LNG = 77.37918363418639;
 const GEOFENCE_RADIUS = 50; // meters
 
 const ALLOWED_DEVICES = [
-    { deviceUUID: "03000200-0400-0500-0006-000700080009", productId: "00331-10000-00001-AA159", label: "Bhupendra Office PC" },
-    { deviceUUID: "FF9C4A14-678F-6F64-7353-E89C2511E53C", productId: "00331-10000-00001-AA316", label: "Jahid Office PC" },
-    { deviceUUID: "03000200-0400-0500-0006-000700080009", productId: "00331-10000-00001-AA620", label: "Santosh Office PC" },
-    { deviceUUID: "03000200-0400-0500-0006-000700080009", productId: "00330-80000-00000-AA007", label: "Anjali Office PC" },
-    { deviceUUID: "03000200-0400-0500-0006-000700080009", productId: "00331-10000-00001-AA351", label: "Rajesh Office PC" },
+    // { deviceUUID: "03000200-0400-0500-0006-000700080009", productId: "00331-10000-00001-AA159", label: "Bhupendra Office PC" },
+    // { deviceUUID: "FF9C4A14-678F-6F64-7353-E89C2511E53C", productId: "00331-10000-00001-AA316", label: "Jahid Office PC" },
+    // { deviceUUID: "03000200-0400-0500-0006-000700080009", productId: "00331-10000-00001-AA620", label: "Santosh Office PC" },
+    // { deviceUUID: "03000200-0400-0500-0006-000700080009", productId: "00330-80000-00000-AA007", label: "Anjali Office PC" },
+    // { deviceUUID: "03000200-0400-0500-0006-000700080009", productId: "00331-10000-00001-AA351", label: "Rajesh Office PC" },
     // { deviceUUID: "BCCB94D0-B8C8-9A11-A0E7-047C16132135", productId: "00355-79631-62791-AAOEM", label: "Dinkar Office PC" },
-    { deviceUUID: "03000200-0400-0500-0006-000700080009", productId: "00331-10000-00001-AA611", label: "Hemant Office PC" },
-    { deviceUUID: "4C4C4544-0032-4D10-8043-B4C04F504C32", productId: "00342-50786-03990-AAOEM", label: "Dipanshu Office PC" },
-    { deviceUUID: "03000200-0400-0500-0006-000700080009", productId: "00329-00000-00003-AA198", label: "Desk-3 Office PC" },
-    { deviceUUID: "03000200-0400-0500-0006-000700080009", productId: "00330-80000-00000-AA681", label: "Bhupendra Office" },
-    { deviceUUID: "03000200-0400-0500-0006-000700080009", productId: "00330-80000-00000-AA082", label: "Bhupendra Office" }
+    // { deviceUUID: "03000200-0400-0500-0006-000700080009", productId: "00331-10000-00001-AA611", label: "Hemant Office PC" },
+    // { deviceUUID: "4C4C4544-0032-4D10-8043-B4C04F504C32", productId: "00342-50786-03990-AAOEM", label: "Dipanshu Office PC" },
+    // { deviceUUID: "03000200-0400-0500-0006-000700080009", productId: "00329-00000-00003-AA198", label: "Desk-3 Office PC" },
+    // { deviceUUID: "03000200-0400-0500-0006-000700080009", productId: "00330-80000-00000-AA681", label: "Bhupendra Office" },
+    // { deviceUUID: "03000200-0400-0500-0006-000700080009", productId: "00330-80000-00000-AA082", label: "Bhupendra Office" }
 ];
 
 const MONTHLY_LATE_QUOTA = 3;
