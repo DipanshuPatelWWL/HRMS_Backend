@@ -1,3 +1,4 @@
+const moment = require("moment-timezone");
 const Attendance = require("../../models/attendance.model");
 const Holiday = require("../../models/holiday.model");
 const Leave = require("../../models/leave.model");
@@ -7,7 +8,7 @@ const leaveCalculationService = require("../leaveCalculationService");
 const PayrollSettings = require("../../models/payrollSettings.model");
 
 const isWeekend = (date) => {
-    const d = new Date(date).getDay();
+    const d = moment(date).tz("Asia/Kolkata").day();
     return d === 0 || d === 6;
 };
 
@@ -78,38 +79,42 @@ const calculateSalary = async (userId, month, year, mode = "final") => {
     if (!user || !user.salary?.monthly) return null;
 
     const monthlySalary = user.salary.monthly;
-    const monthStart = new Date(year, month - 1, 1);
-    const monthEnd = new Date(year, month, 0, 23, 59, 59, 999);
-    const totalCalendarDays = new Date(year, month, 0).getDate();
-    const today = new Date();
+    const monthStartMoment = moment.tz(`${year}-${String(month).padStart(2, "0")}-01`, "Asia/Kolkata").startOf("month");
+    const monthEndMoment = monthStartMoment.clone().endOf("month");
+    const monthStart = monthStartMoment.toDate();
+    const monthEnd = monthEndMoment.toDate();
+    const totalCalendarDays = monthStartMoment.daysInMonth();
+    const todayMoment = moment().tz("Asia/Kolkata");
+    const today = todayMoment.toDate();
 
     // ── 1. EMPLOYMENT PERIOD ──────────────────────────────────────────
-    const enrollmentDate = user.createdAt ? new Date(new Date(user.createdAt).setHours(0, 0, 0, 0)) : null;
+    const enrollmentDate = user.createdAt
+        ? moment(user.createdAt).tz("Asia/Kolkata").startOf("day").toDate()
+        : null;
+    const enrollmentMoment = enrollmentDate ? moment(enrollmentDate).tz("Asia/Kolkata") : null;
     const isLegacy = user.isLegacyEmployee === true;
-    const enrolledThisMonth = !isLegacy && enrollmentDate && enrollmentDate.getFullYear() === year && enrollmentDate.getMonth() === month - 1;
+    const enrolledThisMonth = !isLegacy && enrollmentMoment && enrollmentMoment.year() === year && enrollmentMoment.month() === month - 1;
     const effectiveStart = enrolledThisMonth ? enrollmentDate : new Date(monthStart);
 
     // Evaluation window for attendance/leaves
     let evaluationEnd = monthEnd;
-    if (mode === "earned" && today < monthEnd && today >= monthStart) {
-        evaluationEnd = new Date(today.setHours(23, 59, 59, 999));
+    if (mode === "earned" && todayMoment.isSameOrBefore(monthEndMoment) && todayMoment.isSameOrAfter(monthStartMoment)) {
+        evaluationEnd = todayMoment.clone().endOf("day").toDate();
     }
 
     // Reference point for "passed" days (for projection LOP check)
     let passedEnd = evaluationEnd;
-    if (mode === "projected" && today < monthEnd && today >= monthStart) {
-        passedEnd = new Date(today.setHours(23, 59, 59, 999));
+    if (mode === "projected" && todayMoment.isSameOrBefore(monthEndMoment) && todayMoment.isSameOrAfter(monthStartMoment)) {
+        passedEnd = todayMoment.clone().endOf("day").toDate();
     }
 
     // ── 2. HOLIDAYS ───────────────────────────────────────────────────
     const holidays = await Holiday.find({
         date: { $gte: monthStart, $lte: monthEnd }
     });
-    const holidaySet = new Set(holidays.map(h => {
-        const d = new Date(h.date);
-        d.setHours(0, 0, 0, 0);
-        return d.getTime();
-    }));
+    const holidaySet = new Set(holidays.map(h =>
+        moment(h.date).tz("Asia/Kolkata").startOf("day").valueOf()
+    ));
 
     // ── 3. WORKING DAYS CALCULATION ──────────────────────────────────
     let totalWorkingDaysInMonth = 0;
@@ -117,21 +122,26 @@ const calculateSalary = async (userId, month, year, mode = "final") => {
     let totalWorkingDaysPassed = 0;
     let totalWorkingDaysPassedForLOP = 0;
 
-    for (let d = new Date(monthStart); d <= monthEnd; d.setDate(d.getDate() + 1)) {
-        const cur = new Date(d);
-        cur.setHours(0, 0, 0, 0);
-        if (!isWeekend(cur) && !holidaySet.has(cur.getTime())) {
+    const effectiveStartMs = effectiveStart.getTime();
+    const evaluationEndMs = evaluationEnd.getTime();
+    const passedEndMs = passedEnd.getTime();
+
+    const dayCursor = monthStartMoment.clone();
+    while (dayCursor.isSameOrBefore(monthEndMoment, "day")) {
+        const curMs = dayCursor.clone().startOf("day").valueOf();
+        if (!isWeekend(dayCursor) && !holidaySet.has(curMs)) {
             totalWorkingDaysInMonth++;
-            if (cur >= effectiveStart) {
+            if (curMs >= effectiveStartMs) {
                 totalWorkingDaysEmployed++;
-                if (cur <= evaluationEnd) {
+                if (curMs <= evaluationEndMs) {
                     totalWorkingDaysPassed++;
                 }
-                if (cur <= passedEnd) {
+                if (curMs <= passedEndMs) {
                     totalWorkingDaysPassedForLOP++;
                 }
             }
         }
+        dayCursor.add(1, "day");
     }
 
     if (totalWorkingDaysInMonth === 0) return null;
@@ -147,12 +157,15 @@ const calculateSalary = async (userId, month, year, mode = "final") => {
     let totalUnpaidLeaveDays = 0;
     leaves.forEach(l => {
         let workingDaysInMonth = 0;
-        const from = new Date(l.fromDate); const to = new Date(l.toDate);
-        for (let d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) {
-            const day = new Date(d); day.setHours(0, 0, 0, 0);
-            if (day >= effectiveStart && day <= evaluationEnd && !isWeekend(day) && !holidaySet.has(day.getTime())) {
+        const fromMoment = moment(l.fromDate).tz("Asia/Kolkata").startOf("day");
+        const toMoment = moment(l.toDate).tz("Asia/Kolkata").startOf("day");
+        const cursor = fromMoment.clone();
+        while (cursor.isSameOrBefore(toMoment, "day")) {
+            const dayMs = cursor.clone().startOf("day").valueOf();
+            if (dayMs >= effectiveStartMs && dayMs <= evaluationEndMs && !isWeekend(cursor) && !holidaySet.has(dayMs)) {
                 workingDaysInMonth++;
             }
+            cursor.add(1, "day");
         }
         // Pro-rate unpaid days if leave spans months
         const ratio = l.totalDays > 0 ? (l.unpaidDays || 0) / l.totalDays : 0;
@@ -243,6 +256,10 @@ const calculateSalary = async (userId, month, year, mode = "final") => {
     const deductions = user.salary?.deductions || {};
 
     // PF Calculation with Ceiling Support (Prorated)
+    // Fetch payroll settings up-front so PF/TDS blocks can both use it safely
+    const payrollSettings = await PayrollSettings.findOne({ singletonKey: "singleton" });
+
+    // PF Calculation with Ceiling Support (Prorated)
     const pfEnabled = deductions.pf?.enabled ?? false;
     let pf = 0;
     if (pfEnabled) {
@@ -273,7 +290,6 @@ const calculateSalary = async (userId, month, year, mode = "final") => {
     }
 
     // TDS Calculation
-    const payrollSettings = await PayrollSettings.findOne({ singletonKey: "singleton" });
     const fy = payrollSettings?.financialYear || "2025-26";
     const taxProj = calculateAnnualTax(monthlySalary * 12, fy);
     const tds = taxProj.monthlyTDS;
