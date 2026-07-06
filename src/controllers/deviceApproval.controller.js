@@ -1,7 +1,7 @@
 const { v4: uuidv4 } = require("uuid");
 const DeviceApproval = require("../models/deviceApproval.model");
 const User = require("../models/user.model");
-const { createNotification } = require("./notification.controller");
+const { createNotification, broadcastNotification } = require("./notification.controller");
 
 // ── GET all requests (HR view) ────────────────────────────────────────
 const getAllRequests = async (req, res) => {
@@ -16,6 +16,98 @@ const getAllRequests = async (req, res) => {
             .sort({ createdAt: -1 })
             .lean();
 
+        res.status(200).json({ success: true, requests });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ── EMPLOYEE: request approval for this device ─────────────────────────
+const requestDeviceApproval = async (req, res) => {
+    try {
+        const userId = req.user._id;
+        const { deviceUUID, productId, hostname, os, reason } = req.body || {};
+
+        if (!deviceUUID && !productId) {
+            return res.status(400).json({
+                success: false,
+                message: "Could not read this device's identity. Please try again from the desktop app.",
+            });
+        }
+
+        // Already approved for this exact device?
+        const alreadyApproved = await User.findOne({
+            _id: userId,
+            approvedDevices: {
+                $elemMatch: {
+                    deviceUUID: deviceUUID || "",
+                    productId: productId || "",
+                },
+            },
+        }).select("_id");
+
+        if (alreadyApproved) {
+            return res.status(400).json({
+                success: false,
+                message: "This device is already approved. Try punching in again.",
+            });
+        }
+
+        // One pending request per user per device
+        const existingPending = await DeviceApproval.findOne({
+            user: userId,
+            deviceUUID: deviceUUID || "",
+            productId: productId || "",
+            status: "pending",
+        });
+
+        if (existingPending) {
+            return res.status(400).json({
+                success: false,
+                message: "You already have a pending approval request for this device.",
+            });
+        }
+
+        const clientIP = (req.socket?.remoteAddress || "").replace(/^::ffff:/, "");
+
+        const approval = await DeviceApproval.create({
+            user: userId,
+            deviceUUID: deviceUUID || "",
+            productId: productId || "",
+            hostname: hostname || "",
+            os: os || "",
+            userAgent: req.headers["user-agent"] || "",
+            ipAddress: clientIP,
+            reason: reason || "",
+            status: "pending",
+        });
+
+        const io = req.app.get("io");
+        await broadcastNotification(
+            io,
+            ["hr", "manager"],
+            "Device Approval Request 🖥️",
+            `${req.user.name} requested approval to punch in from a new device`,
+            "device_approval",
+            { approvalId: approval._id, userId }
+        );
+
+        res.status(201).json({
+            success: true,
+            message: "Request sent to HR. You'll be able to punch in once it's approved.",
+            approval,
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ── EMPLOYEE: check status of my own device requests ───────────────────
+const getMyDeviceRequests = async (req, res) => {
+    try {
+        const requests = await DeviceApproval.find({ user: req.user._id })
+            .sort({ createdAt: -1 })
+            .lean();
         res.status(200).json({ success: true, requests });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -168,10 +260,13 @@ const getEmployeeDevices = async (req, res) => {
     }
 };
 
+
 module.exports = {
     getAllRequests,
     approveDevice,
     rejectDevice,
     revokeDevice,
     getEmployeeDevices,
+    requestDeviceApproval,
+    getMyDeviceRequests,
 };

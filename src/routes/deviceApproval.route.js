@@ -9,7 +9,23 @@ const {
     rejectDevice,
     revokeDevice,
     getEmployeeDevices,
+    requestDeviceApproval,
+    getMyDeviceRequests,
 } = require("../controllers/deviceApproval.controller");
+
+
+router.post(
+    "/request",
+    protect,
+    requestDeviceApproval
+);
+
+
+router.get(
+    "/my",
+    protect,
+    getMyDeviceRequests
+);
 
 // HR views all requests
 router.get(

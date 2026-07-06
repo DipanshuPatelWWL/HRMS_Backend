@@ -69,7 +69,7 @@ const evaluateAttendance = async ({ userId, attendanceId, punchIn, punchOut, isH
         return {
             isLate: false,
             isHalfDay: false,
-            status: "missing_punch_out",
+            status: "absent",
             lateMinutes: 0,
             workHours: 0,
             overtime: 0,
@@ -109,7 +109,7 @@ const evaluateAttendance = async ({ userId, attendanceId, punchIn, punchOut, isH
             else if (totalMinutes > sc.halfDayCutoff) { isHalfDay = true; status = "half-day"; }
         }
 
-        const shiftStartMnt = punchInIST.clone().hour(Math.floor(sc.shiftStart/60)).minute(sc.shiftStart%60).second(0);
+        const shiftStartMnt = punchInIST.clone().hour(Math.floor(sc.shiftStart / 60)).minute(sc.shiftStart % 60).second(0);
         lateMinutes = (isLate || isHalfDay) ? parseFloat(Math.max(0, punchInIST.diff(shiftStartMnt, "minutes")).toFixed(2)) : 0;
     }
 
@@ -119,7 +119,7 @@ const evaluateAttendance = async ({ userId, attendanceId, punchIn, punchOut, isH
         workHours = parseFloat(((punchOutIST - punchInIST) / 3600000).toFixed(2));
         const roundedWorkHours = workHours;
 
-        const shiftEndMnt = punchOutIST.clone().hour(Math.floor(sc.shiftEnd/60)).minute(sc.shiftEnd%60).second(0);
+        const shiftEndMnt = punchOutIST.clone().hour(Math.floor(sc.shiftEnd / 60)).minute(sc.shiftEnd % 60).second(0);
         const overtimeMinutes = Math.max(0, punchOutIST.diff(shiftEndMnt, "minutes"));
         overtime = parseFloat((overtimeMinutes / 60).toFixed(2));
 
@@ -148,7 +148,7 @@ const evaluateAttendance = async ({ userId, attendanceId, punchIn, punchOut, isH
             let leniencyApplied = false;
 
             // A. Check Short Leave
-            const isInShortLeaveWindow = sc.isDefaultShift && punchOutTotalMinutes > (17*60+59) && punchOutTotalMinutes < (18*60+45);
+            const isInShortLeaveWindow = sc.isDefaultShift && punchOutTotalMinutes > (17 * 60 + 59) && punchOutTotalMinutes < (18 * 60 + 45);
             if (isInShortLeaveWindow) {
                 const nowMonth = punchOutIST.month() + 1;
                 const nowYear = punchOutIST.year();

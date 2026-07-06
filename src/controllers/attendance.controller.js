@@ -178,7 +178,12 @@ const punchIn = async (req, res) => {
                 // ── No token, not WFH: block ──────────────────────────
                 return res.status(403).json({
                     success: false,
-                    message: "Device not approved. Please login first to request device approval from HR."
+                    code: "DEVICE_NOT_APPROVED",
+                    message: "Device not approved. You can request approval from HR to punch in from this device.",
+                    device: {
+                        deviceUUID: deviceUUID || "",
+                        productId: productId || "",
+                    }
                 });
             }
         }
@@ -538,12 +543,6 @@ const getTeamAttendance = async (req, res) => {
 
         const endOfMonth = startOfMonth.clone().endOf("month");
 
-        const data = await attendanceService.getAttendanceGrid(
-            userId,
-            startOfMonth.toDate(),
-            endOfMonth.toDate()
-        );
-
         const teamMembers = await User.find({
             reportingTo: req.user._id,
             status: "active"
@@ -615,6 +614,7 @@ const getTeamAttendance = async (req, res) => {
 // ─────────────────────────────────────────────
 //  GET HR ATTENDANCE OVERVIEW
 // ─────────────────────────────────────────────
+// NEW
 const getHRAttendanceOverview = async (req, res) => {
     try {
         const { date, month, year } = req.query;
@@ -622,6 +622,7 @@ const getHRAttendanceOverview = async (req, res) => {
         const todayStr = date || nowIST.format("YYYY-MM-DD");
         const todayStart = moment.tz(todayStr, "Asia/Kolkata").startOf("day").toDate();
         const todayEnd = moment.tz(todayStr, "Asia/Kolkata").endOf("day").toDate();
+        const isTodayWeekend = moment.tz(todayStr, "Asia/Kolkata").day() === 0 || moment.tz(todayStr, "Asia/Kolkata").day() === 6;
 
         const m = parseInt(month) || (nowIST.month() + 1);
         const y = parseInt(year) || nowIST.year();
@@ -634,11 +635,12 @@ const getHRAttendanceOverview = async (req, res) => {
         }).select("name employeeId department designation joiningDate shift").lean();
         const validUserIds = users.map(u => u._id);
 
-        const [attendanceToday, leavesToday, monthlyAttendance, monthlyLeaves] = await Promise.all([
+        const [attendanceToday, leavesToday, monthlyAttendance, monthlyLeaves, todayHoliday] = await Promise.all([
             Attendance.find({ user: { $in: validUserIds }, dateString: todayStr }).lean(),
             Leave.find({ user: { $in: validUserIds }, status: "approved", fromDate: { $lte: todayEnd }, toDate: { $gte: todayStart } }).populate("user", "name").lean(),
             Attendance.find({ user: { $in: validUserIds }, date: { $gte: monthStart, $lte: monthEnd } }).lean(),
-            Leave.find({ user: { $in: validUserIds }, status: "approved", fromDate: { $lte: monthEnd }, toDate: { $gte: monthStart } }).lean()
+            Leave.find({ user: { $in: validUserIds }, status: "approved", fromDate: { $lte: monthEnd }, toDate: { $gte: monthStart } }).lean(),
+            Holiday.findOne({ date: { $gte: todayStart, $lte: todayEnd } }).lean()
         ]);
 
         const attMap = new Map(attendanceToday.map(a => [a.user.toString(), a]));
@@ -649,6 +651,8 @@ const getHRAttendanceOverview = async (req, res) => {
             const onLeave = leaveSet.has(u._id.toString());
             let attendanceStatus = "absent";
             if (onLeave) attendanceStatus = "on_leave";
+            else if (todayHoliday) attendanceStatus = "holiday";
+            else if (isTodayWeekend) attendanceStatus = "weekend";
             else if (att) {
                 attendanceStatus = att.punchOut ? "punched_out" : "punched_in";
             }
@@ -666,11 +670,9 @@ const getHRAttendanceOverview = async (req, res) => {
             };
         });
 
-        const activeUserIds = new Set(users.map(u => u._id.toString()));
-        const punchedInIds = new Set(attendanceToday.map(a => a.user.toString()));
-        const onLeaveIds = new Set(leavesToday.map(l => (l.user._id ? l.user._id : l.user).toString()));
-
-        const absentToday = [...activeUserIds].filter(id => !punchedInIds.has(id) && !onLeaveIds.has(id)).length;
+        // absentToday now derives from the same resolved status used in todaySummary,
+        // so holidays/weekends never get counted as absent
+        const absentToday = todaySummary.filter(e => e.attendanceStatus === "absent").length;
 
         const todayOverview = {
             totalActive: users.length,
@@ -679,7 +681,10 @@ const getHRAttendanceOverview = async (req, res) => {
             absentToday,
             onLeaveTodayCount: leavesToday.length,
             lateToday: attendanceToday.filter(a => a.isLate).length,
-            missedPunchOut: attendanceToday.filter(a => a.missedPunchOut).length
+            missedPunchOut: attendanceToday.filter(a => a.missedPunchOut).length,
+            isHoliday: !!todayHoliday,
+            isWeekend: isTodayWeekend,
+            holidayName: todayHoliday?.name || null
         };
 
         // Monthly stats aggregation using centralized service

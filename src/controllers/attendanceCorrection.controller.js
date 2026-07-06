@@ -81,11 +81,17 @@ const applyCorrection = async (correction, hrUserId) => {
         attendance.overtime = evalResult.overtime;
         attendance.isShortLeave = evalResult.isShortLeave;
         attendance.eightHourPassUsed = evalResult.eightHourPassUsed;
+        attendance.halfDayReason = evalResult.halfDayReason || attendance.halfDayReason;
 
-        // ── Explicitly resolve MPO ──
-        if (correction.oldStatus === "missing_punch_out") {
+        if (evalResult.mpoFlag) {
+            attendance.mpoFlag = true;
+            if (!attendance.mpoDetectedAt) attendance.mpoDetectedAt = new Date();
+            attendance.mpoResolved = false;
+        } else if (attendance.mpoFlag) {
+            attendance.mpoFlag = false;
             attendance.mpoResolved = true;
         }
+
         correction.newStatus = evalResult.status;
     } else {
         attendance.workHours = 0;
@@ -293,12 +299,12 @@ const getAllCorrections = async (req, res) => {
             .skip(skip)
             .limit(limitNumber);
 
-        res.status(200).json({ 
-            success: true, 
-            data: corrections, 
-            total, 
-            page: pageNumber, 
-            totalPages: Math.ceil(total / limitNumber) 
+        res.status(200).json({
+            success: true,
+            data: corrections,
+            total,
+            page: pageNumber,
+            totalPages: Math.ceil(total / limitNumber)
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
