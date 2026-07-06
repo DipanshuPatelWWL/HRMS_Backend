@@ -50,11 +50,12 @@ const getMonthlySalary = async (req, res) => {
         }
 
         // ── Calculate using shared engine ─────────────
+        const isCurrentMonth = (parseInt(month) === new Date().getMonth() + 1 && parseInt(year) === new Date().getFullYear());
         const data = await calculateSalary(
             userId,
             parseInt(month),
             parseInt(year),
-            true
+            isCurrentMonth ? "earned" : "final"
         );
 
         if (!data) {
@@ -158,7 +159,7 @@ const updateSalaryStructure = async (req, res) => {
                     return res.status(400).json({ success: false, message: "Invalid PF mode" });
                 }
             }
-            
+
             // Validate PF number
             if (deductions.pf?.enabled && deductions.pf.pfNumber) {
                 const pfNum = deductions.pf.pfNumber.trim().toUpperCase();

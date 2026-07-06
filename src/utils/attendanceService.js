@@ -148,6 +148,7 @@ const calculateStats = (grid) => {
         holiday: 0,
         weekend: 0,
         missingPunchOut: 0,
+        dataAnomalyDays: 0,
         totalWorkHours: 0,
         totalLateMinutes: 0,
         workedDays: 0,
@@ -169,6 +170,8 @@ const calculateStats = (grid) => {
         const isPresentType = ["present", "late", "half-day", "short-leave"].includes(day.status);
         const isCompleted = !!(day.punchIn && day.punchOut);
         const isToday = day.dateString === todayStr;
+        let bucketed = false;
+
         if (isPresentType && isCompleted) {
             // Fully completed day — counts toward Present/Late/HalfDay AND hours
             completedPresentDays++;
@@ -178,9 +181,11 @@ const calculateStats = (grid) => {
             if (day.isHalfDay) stats.halfDay++;
             else if (day.isLate) stats.late++;
             else stats.present++;
+            bucketed = true;
         } else if (isPresentType && day.punchIn && !day.punchOut && isToday) {
             // Still punched in today — don't count as a "Full Day" yet
             stats.inProgress = (stats.inProgress || 0) + 1;
+            bucketed = true;
         } else if (isPresentType && day.punchIn && !day.punchOut && !isToday) {
             // Past day, punched in but never punched out — this is a genuine
             // data gap, not an evaluated half-day. Track it separately so it
@@ -188,16 +193,32 @@ const calculateStats = (grid) => {
             // never actually marked half-day by evaluateAttendance().
             stats.missingPunchOut = (stats.missingPunchOut || 0) + 1;
             stats.workedDays++;
+            bucketed = true;
         } else if (day.status === "missing_punch_out" && day.mpoResolved !== true) {
             stats.missingPunchOut = (stats.missingPunchOut || 0) + 1;
+            bucketed = true;
         } else if (day.status === "absent") {
             stats.absent++;
+            bucketed = true;
         } else if (day.status === "leave") {
             stats.leave++;
+            bucketed = true;
         } else if (day.status === "holiday") {
             stats.holiday++;
+            bucketed = true;
         } else if (day.status === "weekend") {
             stats.weekend++;
+            bucketed = true;
+        }
+
+        // DATA-INTEGRITY SAFETY NET: a working day that matched none of the
+        // buckets above (e.g. an attendance doc with status "present"/"half-day"
+        // but no punchIn at all — a stale/corrupt record) must never be allowed
+        // to silently disappear from the count. Treat it as absent so payroll
+        // LOP stays correct, and flag it separately so HR can see the anomaly.
+        if (!bucketed && day.status !== "not_joined" && day.status !== "inactive" && day.status !== "future") {
+            stats.absent++;
+            stats.dataAnomalyDays = (stats.dataAnomalyDays || 0) + 1;
         }
 
         // Working days are days that are not weekend and not holiday

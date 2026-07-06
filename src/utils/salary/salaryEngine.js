@@ -175,7 +175,13 @@ const calculateSalary = async (userId, month, year, mode = "final") => {
 
     // ── 6. LOP CALCULATION ───────────────────────────────────────────
     const halfDays = payrollData?.halfDays || 0;
-    const absentDays = payrollData?.absentDays || 0;
+    const presentDaysRaw = payrollData?.workedDays || 0;
+    const paidLeaveDaysRaw = payrollData?.actualLeaveDays || 0;
+    const absentDaysReported = payrollData?.absentDays || 0;
+
+    const accountedDays = presentDaysRaw + halfDays + paidLeaveDaysRaw;
+    const unaccountedDays = Math.max(0, totalWorkingDaysPassedForLOP - accountedDays);
+    const absentDays = Math.max(absentDaysReported, unaccountedDays);
 
     const lopDays = Math.max(0, absentDays + totalUnpaidLeaveDays + unpaidSandwichDays + (halfDays * 0.5));
     const lopAmount = round2(lopDays * perDay);
