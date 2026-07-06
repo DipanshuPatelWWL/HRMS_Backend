@@ -29,11 +29,14 @@ const getAttendanceGrid = async (userId, startDate, endDate) => {
         User.findById(userId).select("joiningDate relievingDate createdAt shift").lean()
     ]);
 
+
     const attMap = new Map(
-        attendance.map((a) => [
-            a.dateString || moment(a.date).tz("Asia/Kolkata").format("YYYY-MM-DD"),
-            a
-        ])
+        attendance.map((a) => {
+            const key = a.dateString
+                ? moment(a.dateString).tz("Asia/Kolkata").format("YYYY-MM-DD")
+                : moment(a.date).tz("Asia/Kolkata").format("YYYY-MM-DD");
+            return [key, a];
+        })
     );
 
     const holidayMap = new Map(
@@ -187,12 +190,14 @@ const calculateStats = (grid) => {
             stats.inProgress = (stats.inProgress || 0) + 1;
             bucketed = true;
         } else if (isPresentType && day.punchIn && !day.punchOut && !isToday) {
-            // Past day, punched in but never punched out — this is a genuine
-            // data gap, not an evaluated half-day. Track it separately so it
-            // doesn't inflate the Half-Day chart/count with days that were
-            // never actually marked half-day by evaluateAttendance().
             stats.missingPunchOut = (stats.missingPunchOut || 0) + 1;
             stats.workedDays++;
+            bucketed = true;
+        } else if (isPresentType) {
+            stats.workedDays++;
+            if (day.isHalfDay) stats.halfDay++;
+            else if (day.isLate) stats.late++;
+            else stats.present++;
             bucketed = true;
         } else if (day.status === "missing_punch_out" && day.mpoResolved !== true) {
             stats.missingPunchOut = (stats.missingPunchOut || 0) + 1;
@@ -211,11 +216,6 @@ const calculateStats = (grid) => {
             bucketed = true;
         }
 
-        // DATA-INTEGRITY SAFETY NET: a working day that matched none of the
-        // buckets above (e.g. an attendance doc with status "present"/"half-day"
-        // but no punchIn at all — a stale/corrupt record) must never be allowed
-        // to silently disappear from the count. Treat it as absent so payroll
-        // LOP stays correct, and flag it separately so HR can see the anomaly.
         if (!bucketed && day.status !== "not_joined" && day.status !== "inactive" && day.status !== "future") {
             stats.absent++;
             stats.dataAnomalyDays = (stats.dataAnomalyDays || 0) + 1;
