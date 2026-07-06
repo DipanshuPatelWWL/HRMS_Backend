@@ -146,12 +146,14 @@ const punchIn = async (req, res) => {
             // ── Primary: deviceToken verification ─────────────────────
             const { deviceToken } = req.body || {};
 
-            if (deviceToken) {
-                const fullUser = await User.findById(userId)
-                    .select("approvedDevices")
-                    .lean();
+            const fullUser = await User.findById(userId)
+                .select("approvedDevices")
+                .lean();
 
-                const matchedDevice = fullUser?.approvedDevices?.find(
+            let matchedDevice = null;
+
+            if (deviceToken) {
+                matchedDevice = fullUser?.approvedDevices?.find(
                     d => d.deviceToken === deviceToken
                 );
 
@@ -161,21 +163,25 @@ const punchIn = async (req, res) => {
                         message: "Device token invalid or revoked. Please contact HR."
                     });
                 }
+            } else if (deviceUUID && productId) {
+                // Fallback: agent hasn't persisted the token locally yet,
+                // but the hardware identity already matches an approved device.
+                matchedDevice = fullUser?.approvedDevices?.find(
+                    d => d.deviceUUID === deviceUUID && d.productId === productId
+                );
+            }
 
-                // Update lastUsedAt
+            if (matchedDevice) {
                 await User.updateOne(
-                    { _id: userId, "approvedDevices.deviceToken": deviceToken },
+                    { _id: userId, "approvedDevices.deviceToken": matchedDevice.deviceToken },
                     { $set: { "approvedDevices.$.lastUsedAt": new Date() } }
                 );
-
                 verifiedBy = "device";
 
             } else if (isWFH) {
-                // ── WFH without token: allow location-based ───────────
                 verifiedBy = "location";
 
             } else {
-                // ── No token, not WFH: block ──────────────────────────
                 return res.status(403).json({
                     success: false,
                     code: "DEVICE_NOT_APPROVED",

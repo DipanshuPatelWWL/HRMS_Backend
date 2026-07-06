@@ -29,6 +29,7 @@ const notificationSchema = new mongoose.Schema(
                 "ticket_resolved",
                 "general",
                 "security",
+                "device_approval",
             ],
             default: "general",
         },
