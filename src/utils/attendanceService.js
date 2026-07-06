@@ -147,6 +147,7 @@ const calculateStats = (grid) => {
         leave: 0,
         holiday: 0,
         weekend: 0,
+        missingPunchOut: 0,
         totalWorkHours: 0,
         totalLateMinutes: 0,
         workedDays: 0,
@@ -168,7 +169,6 @@ const calculateStats = (grid) => {
         const isPresentType = ["present", "late", "half-day", "short-leave"].includes(day.status);
         const isCompleted = !!(day.punchIn && day.punchOut);
         const isToday = day.dateString === todayStr;
-
         if (isPresentType && isCompleted) {
             // Fully completed day — counts toward Present/Late/HalfDay AND hours
             completedPresentDays++;
@@ -182,11 +182,14 @@ const calculateStats = (grid) => {
             // Still punched in today — don't count as a "Full Day" yet
             stats.inProgress = (stats.inProgress || 0) + 1;
         } else if (isPresentType && day.punchIn && !day.punchOut && !isToday) {
-            // Past day, punched in but never punched out / never resolved — treat as half day
-            stats.halfDay++;
+            // Past day, punched in but never punched out — this is a genuine
+            // data gap, not an evaluated half-day. Track it separately so it
+            // doesn't inflate the Half-Day chart/count with days that were
+            // never actually marked half-day by evaluateAttendance().
+            stats.missingPunchOut = (stats.missingPunchOut || 0) + 1;
             stats.workedDays++;
         } else if (day.status === "missing_punch_out" && day.mpoResolved !== true) {
-            stats.halfDay++;
+            stats.missingPunchOut = (stats.missingPunchOut || 0) + 1;
         } else if (day.status === "absent") {
             stats.absent++;
         } else if (day.status === "leave") {
