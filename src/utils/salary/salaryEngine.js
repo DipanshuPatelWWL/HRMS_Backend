@@ -162,9 +162,10 @@ const calculateSalary = async (userId, month, year, mode = "final") => {
     // ── 5. ATTENDANCE & SANDWICH ─────────────────────────────────────
     const payrollData = await leaveCalculationService.calculatePayrollDays(userId, month, year);
 
-    // Calculate how many sandwich days can be covered by balance
-    // Sandwich days added = (Total Deducted - Actual Leave Records)
-    const sandwichDaysAdded = Math.max(0, payrollData.leaveDaysWithSandwich - payrollData.actualLeaveDays);
+    const leaveDaysWithSandwich = payrollData?.leaveDaysWithSandwich || 0;
+    const actualLeaveDays = payrollData?.actualLeaveDays || 0;
+
+    const sandwichDaysAdded = Math.max(0, leaveDaysWithSandwich - actualLeaveDays);
 
     const availableBalance = (user.leaveBalance?.casual?.total || 0) - (user.leaveBalance?.casual?.used || 0) +
         (user.leaveBalance?.sick?.total || 0) - (user.leaveBalance?.sick?.used || 0) +
@@ -173,8 +174,8 @@ const calculateSalary = async (userId, month, year, mode = "final") => {
     const unpaidSandwichDays = Math.max(0, sandwichDaysAdded - Math.max(0, availableBalance));
 
     // ── 6. LOP CALCULATION ───────────────────────────────────────────
-    const halfDays = payrollData.halfDays || 0;
-    const absentDays = payrollData.absentDays;
+    const halfDays = payrollData?.halfDays || 0;
+    const absentDays = payrollData?.absentDays || 0;
 
     const lopDays = Math.max(0, absentDays + totalUnpaidLeaveDays + unpaidSandwichDays + (halfDays * 0.5));
     const lopAmount = round2(lopDays * perDay);
@@ -186,7 +187,7 @@ const calculateSalary = async (userId, month, year, mode = "final") => {
 
     // UI fields
     const totalAttendanceDeductions = round2(lopAmount);
-    const presentDays = payrollData.workedDays;
+    const presentDays = payrollData?.workedDays || 0;
 
     // ── 7. SALARY STRUCTURE (V2 Modernized) ──────────────────────────
     const structure = user.salary?.structure || {};
