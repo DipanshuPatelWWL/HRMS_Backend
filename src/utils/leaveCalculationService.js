@@ -91,8 +91,10 @@ const calculateDeductibleLeaves = async (userId, startDate, endDate) => {
  * However, if leave balance is exhausted, Sandwich leaves become LOP.
  */
 const calculatePayrollDays = async (userId, month, year) => {
-    const startOfMonth = moment.tz(`${year}-${String(month).padStart(2, "0")}-01`, "Asia/Kolkata").startOf("month").toDate();
-    const endOfMonth = moment(startOfMonth).endOf("month").toDate();
+    const startOfMonthMoment = moment.tz(`${year}-${String(month).padStart(2, "0")}-01`, "Asia/Kolkata").startOf("month");
+    const endOfMonthMoment = startOfMonthMoment.clone().endOf("month");
+    const startOfMonth = startOfMonthMoment.toDate();
+    const endOfMonth = endOfMonthMoment.toDate();
 
     const grid = await attendanceService.getAttendanceGrid(userId, startOfMonth, endOfMonth);
     const sandwichData = await calculateDeductibleLeaves(userId, startOfMonth, endOfMonth);
