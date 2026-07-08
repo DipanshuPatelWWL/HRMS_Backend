@@ -41,6 +41,13 @@ const {
 } = require("../controllers/user.controller");
 
 
+const {
+    recordSalaryIncrement,
+    getSalaryHistory,
+    getIncrementStats,
+} = require("../controllers/salaryHistory.controller");
+
+
 // ─── Me routes (must be before /:id to avoid "me" being treated as an id) ────
 router.post("/me/avatar", protect, uploadAvatarMiddleware.single("avatar"), uploadAvatar);
 router.put("/me/profile", protect, updateMyProfile);
@@ -213,5 +220,10 @@ router.get(
     allowRoles("hr", "manager", "tl", "superadmin"),
     getLeaveBalance
 )
+
+
+router.post("/:id/salary-increment", protect, allowRoles("hr", "manager", "superadmin"), recordSalaryIncrement);
+router.get("/:id/salary-history", protect, allowRoles("hr", "manager", "superadmin"), getSalaryHistory);
+router.get("/:id/increment-stats", protect, allowRoles("hr", "manager", "superadmin"), getIncrementStats);
 
 module.exports = router;

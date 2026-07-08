@@ -45,15 +45,15 @@ const createAnnouncement = async (req, res) => {
                     announcementId: announcement._id,
                 };
 
-                // Get users
+                // Get users — only active employees
                 let query = {};
                 if (targetUsers?.length > 0) {
-                    query = { _id: { $in: targetUsers } };
+                    query = { _id: { $in: targetUsers }, status: "active" };
                 } else if (targetRole === "all") {
-                    // Send only to employees and TLs
-                    query = { role: { $in: ["employee", "tl"] } };
+                    // Send only to active employees and TLs
+                    query = { role: { $in: ["employee", "tl"] }, status: "active" };
                 } else {
-                    query = { role: targetRole };
+                    query = { role: targetRole, status: "active" };
                 }
 
                 const users = await User.find(query)
@@ -223,7 +223,7 @@ const getSingleAnnouncement = async (req, res) => {
             });
         }
 
-        // Only count actual announcement recipients: employee, tl
+        // Only count actual announcement recipients: employee, tl — active only
         const allowedRoles = ["employee", "tl"];
         let allUsers = [];
 
@@ -231,22 +231,24 @@ const getSingleAnnouncement = async (req, res) => {
             allUsers = await User.find(
                 {
                     _id: { $in: announcement.targetUsers },
-                    role: { $in: allowedRoles }
+                    role: { $in: allowedRoles },
+                    status: "active"
                 },
                 "name role"
             );
         } else if (announcement.targetRole === "all") {
-            // "all" should only include employee and tl for analytics
+            // "all" should only include active employee and tl for analytics
             allUsers = await User.find(
-                { role: { $in: allowedRoles } },
+                { role: { $in: allowedRoles }, status: "active" },
                 "name role"
             );
         } else if (allowedRoles.includes(announcement.targetRole)) {
             allUsers = await User.find(
-                { role: announcement.targetRole },
+                { role: announcement.targetRole, status: "active" },
                 "name role"
             );
         }
+
 
         const uniqueReadMap = new Map();
         announcement.readBy.forEach((u) => {

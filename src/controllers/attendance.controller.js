@@ -142,19 +142,20 @@ const punchIn = async (req, res) => {
                 matchedDevice = fullUser?.approvedDevices?.find(
                     d => d.deviceToken === deviceToken
                 );
+            }
 
-                if (!matchedDevice) {
-                    return res.status(403).json({
-                        success: false,
-                        message: "Device token invalid or revoked. Please contact HR."
-                    });
-                }
-            } else if (productId) {
-                // Fallback: agent hasn't persisted the token locally yet,
-                // but the hardware identity already matches an approved device.
+            if (!matchedDevice && productId) {
                 matchedDevice = fullUser?.approvedDevices?.find(
-                    d => d.productId === productId && (d.deviceUUID || "") === (deviceUUID || "")
+                    d => (d.productId || "").trim() === (productId || "").trim()
+                        && (d.deviceUUID || "").trim() === (deviceUUID || "").trim()
                 );
+            }
+
+            if (!matchedDevice && deviceToken && !productId) {
+                return res.status(403).json({
+                    success: false,
+                    message: "Device token invalid or revoked. Please contact HR."
+                });
             }
 
             if (matchedDevice) {
@@ -229,7 +230,14 @@ const punchIn = async (req, res) => {
         const io = req.app.get("io");
         io.to(`user_${userId}`).emit("tracker:start", { attendanceId: attendance._id, timestamp: new Date() });
 
-        res.status(201).json({ success: true, message: "Punch-in successful", attendance, lateQuotaUsed: isLate ? lateCount + 1 : lateCount, lateQuotaMax: MONTHLY_LATE_QUOTA });
+        res.status(201).json({
+            success: true,
+            message: "Punch-in successful",
+            attendance,
+            lateQuotaUsed: isLate ? lateCount + 1 : lateCount,
+            lateQuotaMax: MONTHLY_LATE_QUOTA,
+            deviceToken: matchedDevice?.deviceToken || null,
+        });
 
         setImmediate(async () => {
             try {
@@ -543,26 +551,70 @@ const getTeamAttendance = async (req, res) => {
 
         const endOfMonth = startOfMonth.clone().endOf("month");
 
-        const teamMembers = await User.find({
-            reportingTo: req.user._id,
-            status: "active"
-        }).select("_id name employeeId department designation joiningDate createdAt shift").lean();
-        const teamIds = teamMembers.map(m => m._id.toString());
+        // ── Fetch EVERY employee who has ever reported to this TL —
+        // active, inactive, or terminated. We no longer filter by current
+        // `status`, because a resigned employee must still show up for the
+        // months they actually worked (e.g. June), just not for months
+        // after they left (e.g. July onward).
+        const allMembers = await User.find({
+            reportingTo: req.user._id
+        }).select("_id name employeeId department designation joiningDate createdAt relievingDate exitDate status shift").lean();
 
-        if (teamIds.length === 0) {
-            return res.status(200).json({ success: true, todaySummary: [], teamMembers: [], monthlyGrid: [] });
+        // "Current" team (still active) — used for the Team Size card
+        const activeMembers = allMembers.filter(u => u.status === "active");
+
+        // Employment window for a member: joiningDate/createdAt → relievingDate/exitDate (or still ongoing)
+        const getEmploymentRange = (u) => {
+            const start = moment(u.joiningDate || u.createdAt).tz("Asia/Kolkata").startOf("day");
+            const endRaw = u.relievingDate || u.exitDate || null;
+            const end = endRaw ? moment(endRaw).tz("Asia/Kolkata").endOf("day") : null;
+            return { start, end };
+        };
+
+        // Was the member employed on a specific day?
+        const wasEmployedOn = (u, dayMoment) => {
+            const { start, end } = getEmploymentRange(u);
+            if (dayMoment.isBefore(start, "day")) return false;
+            if (end && dayMoment.isAfter(end, "day")) return false;
+            return true;
+        };
+
+        // Was the member employed at any point overlapping the selected month?
+        const wasEmployedDuringMonth = (u) => {
+            const { start, end } = getEmploymentRange(u);
+            if (start.isAfter(endOfMonth, "day")) return false;
+            if (end && end.isBefore(startOfMonth, "day")) return false;
+            return true;
+        };
+
+        // Only members employed on the selected day belong in Today/Day-wise view
+        const membersForDay = allMembers.filter(u => wasEmployedOn(u, moment.tz(todayStr, "Asia/Kolkata")));
+
+        // Only members employed at some point during the selected month
+        // belong in Monthly View — a resigned employee still shows for the
+        // months they worked, and disappears from months entirely after
+        // their relieving/exit date.
+        const membersForMonth = allMembers.filter(wasEmployedDuringMonth);
+
+        const relevantIds = Array.from(new Set([
+            ...membersForDay.map(u => u._id.toString()),
+            ...membersForMonth.map(u => u._id.toString()),
+        ]));
+
+        if (relevantIds.length === 0) {
+            return res.status(200).json({ success: true, todaySummary: [], teamMembers: activeMembers, monthlyGrid: [] });
         }
 
         const [attendanceToday, leavesToday, todayHolidays] = await Promise.all([
-            Attendance.find({ user: { $in: teamIds }, dateString: todayStr }).lean(),
-            Leave.find({ user: { $in: teamIds }, status: "approved", fromDate: { $lte: todayEnd }, toDate: { $gte: todayStart } }).lean(),
+            Attendance.find({ user: { $in: relevantIds }, dateString: todayStr }).lean(),
+            Leave.find({ user: { $in: relevantIds }, status: "approved", fromDate: { $lte: todayEnd }, toDate: { $gte: todayStart } }).lean(),
             Holiday.findOne({ date: { $gte: todayStart, $lte: todayEnd } }).lean()
         ]);
 
         const attMap = new Map(attendanceToday.map(a => [a.user.toString(), a]));
         const leaveMap = new Map(leavesToday.map(l => [l.user.toString(), l]));
 
-        const todaySummary = teamMembers.map(u => {
+        const todaySummary = membersForDay.map(u => {
             const att = attMap.get(u._id.toString());
             const leave = leaveMap.get(u._id.toString());
             const isWeekend = moment(todayStart).day() === 0 || moment(todayStart).day() === 6;
@@ -594,8 +646,9 @@ const getTeamAttendance = async (req, res) => {
             };
         });
 
-        // Monthly Grid Calculation using centralized service
-        const monthlyGrid = await Promise.all(teamMembers.map(async (u) => {
+        // Monthly Grid Calculation using centralized service — only for
+        // members who overlapped the selected month
+        const monthlyGrid = await Promise.all(membersForMonth.map(async (u) => {
             const grid = await attendanceService.getAttendanceGrid(u._id, startOfMonth.toDate(), endOfMonth.toDate());
             const stats = attendanceService.calculateStats(grid);
             return {
@@ -605,7 +658,7 @@ const getTeamAttendance = async (req, res) => {
             };
         }));
 
-        res.status(200).json({ success: true, todaySummary, teamMembers, monthlyGrid });
+        res.status(200).json({ success: true, todaySummary, teamMembers: activeMembers, monthlyGrid });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -628,25 +681,62 @@ const getHRAttendanceOverview = async (req, res) => {
         const y = parseInt(year) || nowIST.year();
         const monthStart = moment.tz(`${y}-${m}-01`, "YYYY-MM-DD", "Asia/Kolkata").startOf("month").toDate();
         const monthEnd = moment.tz(`${y}-${m}-01`, "YYYY-MM-DD", "Asia/Kolkata").endOf("month").toDate();
+        const monthEndMoment = moment.tz(`${y}-${m}-01`, "YYYY-MM-DD", "Asia/Kolkata").endOf("month");
+        const monthStartMoment = moment.tz(`${y}-${m}-01`, "YYYY-MM-DD", "Asia/Kolkata").startOf("month");
 
-        const users = await User.find({
-            status: "active",
+        // ── Fetch every employee regardless of current status — active,
+        // inactive, or terminated. Visibility per view is then decided by
+        // their actual joiningDate → relievingDate/exitDate employment
+        // window, not by their current status field.
+        const allUsers = await User.find({
             role: { $nin: ["superadmin", "manager"] }
-        }).select("name employeeId department designation joiningDate shift").lean();
-        const validUserIds = users.map(u => u._id);
+        }).select("name employeeId department designation joiningDate createdAt relievingDate exitDate status shift").lean();
 
-        const [attendanceToday, leavesToday, monthlyAttendance, monthlyLeaves, todayHoliday] = await Promise.all([
-            Attendance.find({ user: { $in: validUserIds }, dateString: todayStr }).lean(),
-            Leave.find({ user: { $in: validUserIds }, status: "approved", fromDate: { $lte: todayEnd }, toDate: { $gte: todayStart } }).populate("user", "name").lean(),
-            Attendance.find({ user: { $in: validUserIds }, date: { $gte: monthStart, $lte: monthEnd } }).lean(),
-            Leave.find({ user: { $in: validUserIds }, status: "approved", fromDate: { $lte: monthEnd }, toDate: { $gte: monthStart } }).lean(),
+        const getEmploymentRange = (u) => {
+            const start = moment(u.joiningDate || u.createdAt).tz("Asia/Kolkata").startOf("day");
+            const endRaw = u.relievingDate || u.exitDate || null;
+            const end = endRaw ? moment(endRaw).tz("Asia/Kolkata").endOf("day") : null;
+            return { start, end };
+        };
+
+        const wasEmployedOn = (u, dayMoment) => {
+            const { start, end } = getEmploymentRange(u);
+            if (dayMoment.isBefore(start, "day")) return false;
+            if (end && dayMoment.isAfter(end, "day")) return false;
+            return true;
+        };
+
+        const wasEmployedDuringMonth = (u) => {
+            const { start, end } = getEmploymentRange(u);
+            if (start.isAfter(monthEndMoment, "day")) return false;
+            if (end && end.isBefore(monthStartMoment, "day")) return false;
+            return true;
+        };
+
+        // Employees currently active — used for the "Total Active" stat
+        const activeUsers = allUsers.filter(u => u.status === "active");
+
+        // Employed on the selected day → Today's Status table
+        const usersForDay = allUsers.filter(u => wasEmployedOn(u, moment.tz(todayStr, "Asia/Kolkata")));
+
+        // Employed at any point during the selected month → Monthly Stats table
+        const usersForMonth = allUsers.filter(wasEmployedDuringMonth);
+
+        const relevantIds = Array.from(new Set([
+            ...usersForDay.map(u => u._id.toString()),
+            ...usersForMonth.map(u => u._id.toString()),
+        ]));
+
+        const [attendanceToday, leavesToday, todayHoliday] = await Promise.all([
+            Attendance.find({ user: { $in: relevantIds }, dateString: todayStr }).lean(),
+            Leave.find({ user: { $in: relevantIds }, status: "approved", fromDate: { $lte: todayEnd }, toDate: { $gte: todayStart } }).populate("user", "name").lean(),
             Holiday.findOne({ date: { $gte: todayStart, $lte: todayEnd } }).lean()
         ]);
 
         const attMap = new Map(attendanceToday.map(a => [a.user.toString(), a]));
         const leaveSet = new Set(leavesToday.map(l => l.user._id ? l.user._id.toString() : l.user.toString()));
 
-        const todaySummary = users.map(u => {
+        const todaySummary = usersForDay.map(u => {
             const att = attMap.get(u._id.toString());
             const onLeave = leaveSet.has(u._id.toString());
             let attendanceStatus = "absent";
@@ -675,7 +765,7 @@ const getHRAttendanceOverview = async (req, res) => {
         const absentToday = todaySummary.filter(e => e.attendanceStatus === "absent").length;
 
         const todayOverview = {
-            totalActive: users.length,
+            totalActive: activeUsers.length,
             punchedIn: attendanceToday.filter(a => !a.punchOut && !a.missedPunchOut).length,
             punchedOut: attendanceToday.filter(a => a.punchOut).length,
             absentToday,
@@ -687,8 +777,9 @@ const getHRAttendanceOverview = async (req, res) => {
             holidayName: todayHoliday?.name || null
         };
 
-        // Monthly stats aggregation using centralized service
-        const monthlyStats = await Promise.all(users.map(async (u) => {
+        // Monthly stats aggregation using centralized service — only for
+        // employees who overlapped the selected month
+        const monthlyStats = await Promise.all(usersForMonth.map(async (u) => {
             const grid = await attendanceService.getAttendanceGrid(u._id, monthStart, monthEnd);
             const stats = attendanceService.calculateStats(grid);
             return {
@@ -721,12 +812,20 @@ const getDayWiseAttendance = async (req, res) => {
             ? moment.tz(date, "Asia/Kolkata").startOf("day")
             : moment().tz("Asia/Kolkata").startOf("day");
 
-        const users = await User.find({
-            status: "active",
+        const allUsers = await User.find({
             role: { $nin: ["superadmin", "manager"] }
         })
-            .select("name employeeId department joiningDate createdAt shift")
+            .select("name employeeId department joiningDate createdAt relievingDate exitDate status shift")
             .lean();
+
+        const users = allUsers.filter(u => {
+            const start = moment(u.joiningDate || u.createdAt).tz("Asia/Kolkata").startOf("day");
+            const endRaw = u.relievingDate || u.exitDate || null;
+            const end = endRaw ? moment(endRaw).tz("Asia/Kolkata").endOf("day") : null;
+            if (queryDate.isBefore(start, "day")) return false;
+            if (end && queryDate.isAfter(end, "day")) return false;
+            return true;
+        });
 
         const data = await Promise.all(
             users.map(async (u) => {

@@ -142,6 +142,12 @@ const getAllUsers = async (req, res) => {
             filter.isDeleted = { $ne: true };
         }
 
+        // Optional: only applied when the caller explicitly asks for it,
+        // so existing screens that need all employees are unaffected.
+        if (req.query.status === "active") {
+            filter.status = "active";
+        }
+
         const users = await User.find(filter).select("-password");
 
         const safeUsers = users.map(user => {
@@ -357,14 +363,16 @@ const updateUser = async (req, res) => {
 // ─────────────────────────────────────────────
 const deleteUser = async (req, res) => {
     try {
+        const now = new Date();
         const user = await User.findByIdAndUpdate(
             req.params.id,
             {
                 $set: {
                     status: "terminated",
                     isDeleted: true,
-                    deletedAt: new Date(),
-                    deletedBy: req.user._id
+                    deletedAt: now,
+                    deletedBy: req.user._id,
+                    exitDate: now,
                 }
             },
             { new: true }
@@ -411,7 +419,18 @@ const updateUserStatus = async (req, res) => {
             return res.status(403).json({ success: false, message: "Not allowed to modify superadmin" });
         }
 
+        const wasActive = target.status === "active";
         target.status = status;
+
+        if (wasActive && status !== "active") {
+            const now = new Date();
+            target.exitDate = now;
+            if (!target.relievingDate) target.relievingDate = now;
+        } else if (status === "active") {
+            target.exitDate = null; // reactivated — clear any old exit date
+            target.relievingDate = null;
+        }
+
         await target.save();
 
         res.status(200).json({

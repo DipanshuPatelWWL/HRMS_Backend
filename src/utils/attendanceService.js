@@ -26,7 +26,7 @@ const getAttendanceGrid = async (userId, startDate, endDate) => {
             fromDate: { $lte: end.toDate() },
             toDate: { $gte: start.toDate() }
         }).lean(),
-        User.findById(userId).select("joiningDate relievingDate createdAt shift").lean()
+        User.findById(userId).select("joiningDate relievingDate exitDate createdAt shift").lean()
     ]);
 
 
@@ -64,7 +64,7 @@ const getAttendanceGrid = async (userId, startDate, endDate) => {
 
     // Effective dates
     const joiningDate = user?.joiningDate || user?.createdAt;
-    const relievingDate = user?.relievingDate;
+    const relievingDate = user?.relievingDate || user?.exitDate;
     const joiningMoment = joiningDate ? moment(joiningDate).tz("Asia/Kolkata").startOf("day") : null;
     const relievingMoment = relievingDate ? moment(relievingDate).tz("Asia/Kolkata").endOf("day") : null;
 

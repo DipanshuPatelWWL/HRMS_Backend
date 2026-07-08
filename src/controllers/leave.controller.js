@@ -693,18 +693,18 @@ const revokeLeave = async (req, res) => {
         leave.status = "revoked";
         leave.paidDays = 0;
         leave.unpaidDays = 0;
-        
+
         // Restore overwritten attendance records
         if (leave.overwrittenAttendances && leave.overwrittenAttendances.length > 0) {
             for (const att of leave.overwrittenAttendances) {
                 try {
                     await Attendance.create(att);
-                } catch(e) { 
+                } catch (e) {
                     // Ignore duplicate key errors if the user somehow punched in again
                 }
             }
         }
-        
+
         await leave.save();
 
         // ✅ Notify employee — io passed correctly
@@ -753,7 +753,7 @@ const deleteLeave = async (req, res) => {
                 for (const att of leave.overwrittenAttendances) {
                     try {
                         await Attendance.create(att);
-                    } catch(e) { 
+                    } catch (e) {
                         // Ignore duplicate key errors
                     }
                 }
@@ -857,8 +857,11 @@ const getLeaveBalance = async (req, res) => {
 // ─────────────────────────────────────────────
 const getEmployeesLeaveBalances = async (req, res) => {
     try {
-        const employees = await User.find({ role: { $in: ["employee", "tl"] } })
-            .select("name email employeeId role leaveBalance")
+        const employees = await User.find({
+            role: { $in: ["employee", "tl"] },
+            status: "active",
+        })
+            .select("name email employeeId role department leaveBalance")
             .sort({ name: 1 });
 
         res.status(200).json({ success: true, employees });

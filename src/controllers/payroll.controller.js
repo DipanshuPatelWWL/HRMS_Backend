@@ -106,10 +106,31 @@ const generatePayroll = async (req, res) => {
             if (!u) return res.status(404).json({ success: false, message: "Employee not found" });
             users = [u];
         } else {
+            // Boundaries of the payroll period being generated (IST)
+            const periodStart = moment.tz(`${y}-${m}-01`, "YYYY-M-DD", "Asia/Kolkata").startOf("day").toDate();
+            const periodEnd = moment.tz(`${y}-${m}-01`, "YYYY-M-DD", "Asia/Kolkata").endOf("month").toDate();
             users = await User.find({
-                status: "active",
                 role: { $in: ["employee", "tl"] },
                 "salary.monthly": { $gt: 0 },
+                joiningDate: { $lte: periodEnd },
+                $and: [
+                    {
+                        // Exclude anyone whose exitDate OR relievingDate falls
+                        // before this payroll period — either field being set
+                        // and before periodStart is enough to exclude them.
+                        $nor: [
+                            { exitDate: { $lt: periodStart } },
+                            { relievingDate: { $lt: periodStart } },
+                        ],
+                    },
+                    {
+                        $or: [
+                            { deletedAt: null },
+                            { deletedAt: { $exists: false } },
+                            { deletedAt: { $gte: periodStart } },
+                        ],
+                    },
+                ],
             });
         }
 
@@ -192,20 +213,39 @@ const getAllPayrolls = async (req, res) => {
             .populate({
                 path: "employee",
                 match: { role: { $nin: ["manager", "superadmin"] } },
-                select: "name email employeeId guardianName fatherName parentName department designation role joiningDate dob salary bankDetails governmentId"
+                select: "name email employeeId guardianName fatherName parentName department designation role joiningDate dob salary bankDetails governmentId exitDate relievingDate deletedAt"
             })
             .populate("paidBy", "name")
             .sort({ year: -1, month: -1, createdAt: -1 });
 
-        // Filter out records where employee population failed (Manager/SuperAdmin)
-        const filteredPayrolls = payrolls.filter(p => p.employee);
+        const filteredPayrolls = payrolls.filter(p => {
+            if (!p.employee) return false;
+            if (p.status === "paid") return true;
+
+            const periodStart = moment
+                .tz(`${p.year}-${p.month}-01`, "YYYY-M-DD", "Asia/Kolkata")
+                .startOf("day")
+                .toDate();
+            const periodEnd = moment
+                .tz(`${p.year}-${p.month}-01`, "YYYY-M-DD", "Asia/Kolkata")
+                .endOf("month")
+                .toDate();
+
+            const exitedBeforePeriod =
+                (p.employee.exitDate && p.employee.exitDate < periodStart) ||
+                (p.employee.relievingDate && p.employee.relievingDate < periodStart) ||
+                (p.employee.deletedAt && p.employee.deletedAt < periodStart);
+            const joinedAfterPeriod =
+                p.employee.joiningDate && p.employee.joiningDate > periodEnd;
+
+            return !exitedBeforePeriod && !joinedAfterPeriod;
+        });
 
         res.json({ success: true, count: filteredPayrolls.length, payrolls: filteredPayrolls });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 // ─────────────────────────────────────────────
 //  MARK AS PAID  (HR)
 // ─────────────────────────────────────────────

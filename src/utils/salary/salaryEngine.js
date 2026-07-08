@@ -6,6 +6,7 @@ const User = require("../../models/user.model");
 const { calculateAnnualTax } = require("./tdsCalculator");
 const leaveCalculationService = require("../leaveCalculationService");
 const PayrollSettings = require("../../models/payrollSettings.model");
+const { resolveMonthlySalary } = require("./salaryHistoryResolver");
 
 const isWeekend = (date) => {
     const d = moment(date).tz("Asia/Kolkata").day();
@@ -76,9 +77,11 @@ function getPT(stateCode, grossSalary, month) {
  */
 const calculateSalary = async (userId, month, year, mode = "final") => {
     const user = await User.findById(userId);
-    if (!user || !user.salary?.monthly) return null;
+    if (!user) return null;
 
-    const monthlySalary = user.salary.monthly;
+    const monthlySalary = await resolveMonthlySalary(userId, month, year, user.salary?.monthly || 0);
+    if (!monthlySalary) return null;
+
     const monthStartMoment = moment.tz(`${year}-${String(month).padStart(2, "0")}-01`, "Asia/Kolkata").startOf("month");
     const monthEndMoment = monthStartMoment.clone().endOf("month");
     const monthStart = monthStartMoment.toDate();
@@ -292,7 +295,7 @@ const calculateSalary = async (userId, month, year, mode = "final") => {
     // TDS Calculation
     const fy = payrollSettings?.financialYear || "2025-26";
     const taxProj = calculateAnnualTax(monthlySalary * 12, fy);
-    const tds = taxProj.monthlyTDS;
+    const tds = round2(taxProj.monthlyTDS * earningRatio);
 
     const totalStatutory = round2(pf + esi + pt + tds);
     const netSalary = round2(Math.max(0, grossEarnings - totalStatutory));

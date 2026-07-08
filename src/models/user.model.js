@@ -207,6 +207,11 @@ const userSchema = new mongoose.Schema(
             default: null,
         },
 
+        exitDate: {
+            type: Date,
+            default: null,
+        },
+
         employmentType: {
             type: String,
             enum: ["full-time", "part-time", "intern", "contract"],
