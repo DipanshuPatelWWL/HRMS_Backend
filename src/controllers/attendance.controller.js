@@ -71,11 +71,41 @@ const punchIn = async (req, res) => {
         }
 
         const [userDoc, holiday, leave, existing, lateCount] = await Promise.all([
-            User.findById(userId).select("shift reportingTo email name").lean(),
-            Holiday.findOne({ date: { $gte: todayStart, $lte: todayEnd } }).lean(),
-            Leave.findOne({ user: userId, status: "approved", fromDate: { $lte: todayEnd }, toDate: { $gte: todayStart } }).lean(),
-            Attendance.findOne({ user: userId, dateString: todayString }).select("_id punchOut").lean(),
-            Attendance.countDocuments({ user: userId, date: { $gte: monthStart, $lte: monthEnd }, isLate: true })
+            User.findById(userId)
+                .select(
+                    "shift reportingTo email name workLocation workLocationConfig"
+                )
+                .lean(),
+
+            Holiday.findOne({
+                date: {
+                    $gte: todayStart,
+                    $lte: todayEnd
+                }
+            }).lean(),
+
+            Leave.findOne({
+                user: userId,
+                status: "approved",
+                fromDate: { $lte: todayEnd },
+                toDate: { $gte: todayStart }
+            }).lean(),
+
+            Attendance.findOne({
+                user: userId,
+                dateString: todayString
+            })
+                .select("_id punchOut")
+                .lean(),
+
+            Attendance.countDocuments({
+                user: userId,
+                date: {
+                    $gte: monthStart,
+                    $lte: monthEnd
+                },
+                isLate: true
+            })
         ]);
 
         if (holiday) return res.status(400).json({ success: false, message: `Today is a holiday: ${holiday.name}` });
@@ -124,6 +154,7 @@ const punchIn = async (req, res) => {
             now2 <= new Date(wlc.endDate);
 
         let verifiedBy = "device";
+        let matchedDevice = null;
 
         if (isOfflinePunch) {
             verifiedBy = "offline";
@@ -135,19 +166,17 @@ const punchIn = async (req, res) => {
             const fullUser = await User.findById(userId)
                 .select("approvedDevices")
                 .lean();
-
-            let matchedDevice = null;
-
             if (deviceToken) {
                 matchedDevice = fullUser?.approvedDevices?.find(
-                    d => d.deviceToken === deviceToken
+                    d => (d.deviceToken || "").trim() === (deviceToken || "").trim()
                 );
             }
 
-            if (!matchedDevice && productId) {
+            if (!matchedDevice && productId && deviceUUID) {
                 matchedDevice = fullUser?.approvedDevices?.find(
-                    d => (d.productId || "").trim() === (productId || "").trim()
-                        && (d.deviceUUID || "").trim() === (deviceUUID || "").trim()
+                    d =>
+                        (d.productId || "").trim() === (productId || "").trim() &&
+                        (d.deviceUUID || "").trim() === (deviceUUID || "").trim()
                 );
             }
 
@@ -160,31 +189,52 @@ const punchIn = async (req, res) => {
 
             if (matchedDevice) {
                 await User.updateOne(
-                    { _id: userId, "approvedDevices.deviceToken": matchedDevice.deviceToken },
-                    { $set: { "approvedDevices.$.lastUsedAt": new Date() } }
+                    {
+                        _id: userId,
+                        "approvedDevices.deviceToken": matchedDevice.deviceToken
+                    },
+                    {
+                        $set: {
+                            "approvedDevices.$.lastUsedAt": new Date()
+                        }
+                    }
                 );
+
                 verifiedBy = "device";
 
             } else {
+
                 // ── Fallback: geofence verification ────────────────────
-                // Device isn't approved, but if the reported GPS location is
-                // within office radius, allow punch-in without an HR request.
-                const hasCoords = typeof lat === "number" && typeof lng === "number";
-                const distance = hasCoords ? getDistance(lat, lng, OFFICE_LAT, OFFICE_LNG) : null;
-                const withinGeofence = hasCoords && distance <= GEOFENCE_RADIUS;
+
+                const hasCoords =
+                    typeof lat === "number" &&
+                    typeof lng === "number";
+
+                const distance = hasCoords
+                    ? getDistance(lat, lng, OFFICE_LAT, OFFICE_LNG)
+                    : null;
+
+                const withinGeofence =
+                    hasCoords &&
+                    distance <= GEOFENCE_RADIUS;
 
                 if (withinGeofence) {
+
                     verifiedBy = "location";
+
                 } else {
+
                     return res.status(403).json({
                         success: false,
                         code: "DEVICE_NOT_APPROVED",
-                        message: "Device not approved and you're not within office range. You can request approval from HR to punch in from this device.",
+                        message:
+                            "Device not approved and you're not within office range. You can request approval from HR to punch in from this device.",
                         device: {
                             deviceUUID: deviceUUID || "",
                             productId: productId || "",
                         }
                     });
+
                 }
             }
         }
