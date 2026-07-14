@@ -12,6 +12,7 @@ const historySchema = new mongoose.Schema(
                 "photo_uploaded",
                 "replaced",
                 "retired",
+                "returned",
                 "desk_updated",
                 "password_updated",
             ],
@@ -103,6 +104,11 @@ const assetSchema = new mongoose.Schema(
         isActive: {
             type: Boolean,
             default: true,
+        },
+
+        returnDate: {
+            type: Date,
+            default: null,
         },
 
         history: [historySchema],

@@ -280,6 +280,48 @@ const retireAsset = asyncHandler(async (req, res) => {
     res.status(200).json({ success: true, message: "Asset retired successfully", data: asset });
 });
 
+
+const returnAsset = asyncHandler(async (req, res) => {
+    const { assetId } = req.params;
+    const { note } = req.body;
+
+    const record = await EmployeeAssetRecord.findOne({ "assets._id": assetId });
+    if (!record) {
+        res.status(404);
+        throw new Error("Asset not found");
+    }
+
+    const isOwner = record.employee.toString() === req.user._id.toString();
+    if (!isOwner) {
+        res.status(403);
+        throw new Error("Access denied");
+    }
+
+    const asset = record.assets.id(assetId);
+
+    if (asset.returnDate || asset.isActive === false) {
+        res.status(400);
+        throw new Error("This asset has already been returned");
+    }
+
+    const returnedAt = new Date(); // server-side timestamp, not client-supplied
+
+    asset.isActive = false;
+    asset.returnDate = returnedAt;
+
+    asset.history.push(
+        buildHistoryEntry("returned", note || "Asset returned by employee", req, asset.condition)
+    );
+
+    await record.save();
+
+    res.status(200).json({
+        success: true,
+        message: "Asset returned successfully",
+        data: asset,
+    });
+});
+
 // ─── @desc    Get single asset's full history
 // ─── @route   GET /api/assets/:assetId/history
 // ─── @access  Private — hr, manager, admin OR owner
@@ -560,6 +602,7 @@ module.exports = {
     updateDeskNumber,
     updateSystemPassword,
     retireAsset,
+    returnAsset,
     getAssetHistory,
     scanAssetBarcode,
 };

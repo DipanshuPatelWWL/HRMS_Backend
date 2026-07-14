@@ -13,6 +13,7 @@ const {
     updateDeskNumber,
     updateSystemPassword,
     retireAsset,
+    returnAsset,
     getAssetHistory,
     scanAssetBarcode,
 } = require("../controllers/asset.controller");
@@ -82,6 +83,8 @@ router.patch(
     allowRoles(...HR_ROLES),
     retireAsset
 );
+
+router.patch("/:assetId/return", protect, returnAsset);
 
 // GET  /api/assets/:assetId/history     → view history (hr or owner)
 router.get("/:assetId/history", protect, getAssetHistory);
