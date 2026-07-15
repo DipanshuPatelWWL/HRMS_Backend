@@ -74,6 +74,7 @@ const processShiftReminders = async () => {
             punchIn: { $ne: null },
             dateString: { $in: [todayString, yesterdayString] },
         }).populate("user", "name email shift role shiftReminderEmail status");
+        console.log(`[ShiftReminder] tick @ ${nowIST.format("HH:mm")} — ${openAttendances.length} open attendance(s)`);
 
         for (const att of openAttendances) {
             if (!att.user || att.user.status !== "active") continue;
@@ -85,11 +86,11 @@ const processShiftReminders = async () => {
             const isWorkingDay = attDate.day() !== 0 && attDate.day() !== 6;
             if (!isWorkingDay) continue;
 
-            const holiday = await Holiday.findOne({ 
-                date: { 
-                    $gte: attDate.clone().startOf("day").toDate(), 
-                    $lte: attDate.clone().endOf("day").toDate() 
-                } 
+            const holiday = await Holiday.findOne({
+                date: {
+                    $gte: attDate.clone().startOf("day").toDate(),
+                    $lte: attDate.clone().endOf("day").toDate()
+                }
             });
             if (holiday) continue;
 
@@ -105,7 +106,7 @@ const processShiftReminders = async () => {
             // 3. CALCULATION (Rule A: Configured Shift End)
             const s = att.user.shift || {};
             const shiftEndMins = (s.endHour ?? 19) * 60 + (s.endMinute ?? 0);
-            
+
             let diff;
             if (att.dateString === yesterdayString) {
                 // If it's yesterday's record, shiftEnd must be early today for a reminder to fire

@@ -169,7 +169,7 @@ io.on("connection", (socket) => {
     });
 
     socket.on("stream:frame", (data) => {
-        if (allowedRoles.includes(socket.user?.role)) {
+        if (socket.user) {
             io.to("hr_room").emit("stream:frame", data);
         }
     });

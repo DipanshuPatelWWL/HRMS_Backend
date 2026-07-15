@@ -86,6 +86,7 @@ const createAnnouncement = async (req, res) => {
                 );
 
                 // 3. Email Notifications (Sequential for SMTP safety)
+                let emailsSent = 0, emailsFailed = 0;
                 for (const u of filteredUsers) {
                     try {
                         // Double check safeguard
@@ -101,20 +102,22 @@ const createAnnouncement = async (req, res) => {
                             body,
                             postedBy: req.user?.name || "HR",
                         });
+                        emailsSent++;
 
                         // Optional: Small delay to prevent SMTP burst for large lists
                         if (filteredUsers.length > 50) {
                             await new Promise(r => setTimeout(r, 100));
                         }
                     } catch (emailErr) {
+                        emailsFailed++;
                         // Keep console.error for genuine failures
                         console.error("Email error for:", u.email, emailErr.message);
                     }
                 }
-
+                console.log(`Announcement ${announcement._id}: ${emailsSent} email(s) sent, ${emailsFailed} failed, ${filteredUsers.length} total recipients`);
             } catch (err) {
                 console.error(
-                    "Announcement background task failed:",
+                    `Announcement background task failed for announcement ${announcement._id}:`,
                     err
                 );
             }
