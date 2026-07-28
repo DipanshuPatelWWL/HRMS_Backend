@@ -105,7 +105,7 @@ const generateToken = (user, sessionId) => {
             sessionId,
         },
         process.env.JWT_SECRET,
-        { expiresIn: "7d" }
+        { expiresIn: "15d" }
     );
 };
 

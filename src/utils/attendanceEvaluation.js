@@ -125,9 +125,9 @@ const evaluateAttendance = async ({ userId, attendanceId, punchIn, punchOut, isH
 
         const punchOutTotalMinutes = punchOutIST.hour() * 60 + punchOutIST.minute();
         const earlyExit = punchOutTotalMinutes < sc.shiftEnd;
-        const shortHours = roundedWorkHours < 9;
+        const shortHours = roundedWorkHours < 8.40;
         const totalWorkedMinutes = Math.round(workHours * 60);
-        const withinGrace = totalWorkedMinutes >= (9 * 60 - 10);
+        const withinGrace = totalWorkedMinutes >= (8.40 * 60 - 10);
 
         const shiftDurationMinutes = sc.shiftEnd > sc.shiftStart ? sc.shiftEnd - sc.shiftStart : (1440 - sc.shiftStart) + sc.shiftEnd;
         const shiftCompleted = totalWorkedMinutes >= (shiftDurationMinutes - 10);
