@@ -63,9 +63,12 @@ const getAttendanceGrid = async (userId, startDate, endDate) => {
     let curr = start.clone();
 
     // Effective dates
-    const joiningDate = user?.joiningDate || user?.createdAt;
+    const joiningMoment = user?.joiningDate
+        ? moment(user.joiningDate).tz("Asia/Kolkata").startOf("day")
+        : (user?.createdAt ? moment(user.createdAt).tz("Asia/Kolkata").startOf("day") : null);
+    const createdMoment = user?.createdAt ? moment(user.createdAt).tz("Asia/Kolkata").startOf("day") : null;
+
     const relievingDate = user?.relievingDate || user?.exitDate;
-    const joiningMoment = joiningDate ? moment(joiningDate).tz("Asia/Kolkata").startOf("day") : null;
     const relievingMoment = relievingDate ? moment(relievingDate).tz("Asia/Kolkata").endOf("day") : null;
 
     while (curr.isSameOrBefore(end)) {
@@ -78,6 +81,9 @@ const getAttendanceGrid = async (userId, startDate, endDate) => {
 
         const isJoined = joiningMoment ? curr.isSameOrAfter(joiningMoment) : true;
         const isRelieved = relievingMoment ? curr.isAfter(relievingMoment) : false;
+        // Employed at the office, but the HRMS account didn't exist yet on this day —
+        // no punch data can possibly exist, so this must never read as "Absent".
+        const isPreSystem = isJoined && createdMoment ? curr.isBefore(createdMoment) : false;
 
         let status = "absent";
         let displayStatus = "Absent";
@@ -88,6 +94,9 @@ const getAttendanceGrid = async (userId, startDate, endDate) => {
         } else if (isRelieved) {
             status = "inactive";
             displayStatus = "Inactive";
+        } else if (isPreSystem) {
+            status = "pre_system";
+            displayStatus = "No Record (Pre-System)";
         } else if (leave) {
             status = "leave";
             displayStatus = "Leave";
@@ -168,7 +177,7 @@ const calculateStats = (grid) => {
     grid.forEach(day => {
         // Only count stats for past and today
         if (day.dateString > todayStr) return;
-        if (day.status === "not_joined" || day.status === "inactive") return;
+        if (day.status === "not_joined" || day.status === "inactive" || day.status === "pre_system") return;
 
         const isPresentType = ["present", "late", "half-day", "short-leave"].includes(day.status);
         const isCompleted = !!(day.punchIn && day.punchOut);
@@ -216,13 +225,13 @@ const calculateStats = (grid) => {
             bucketed = true;
         }
 
-        if (!bucketed && day.status !== "not_joined" && day.status !== "inactive" && day.status !== "future") {
+        if (!bucketed && day.status !== "not_joined" && day.status !== "inactive" && day.status !== "pre_system" && day.status !== "future") {
             stats.absent++;
             stats.dataAnomalyDays = (stats.dataAnomalyDays || 0) + 1;
         }
 
         // Working days are days that are not weekend and not holiday
-        if (day.status !== "weekend" && day.status !== "holiday" && day.status !== "not_joined" && day.status !== "inactive") {
+        if (day.status !== "weekend" && day.status !== "holiday" && day.status !== "not_joined" && day.status !== "inactive" && day.status !== "pre_system") {
             stats.workingDays++;
         }
     });
