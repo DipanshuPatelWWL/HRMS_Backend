@@ -18,9 +18,8 @@ const startServer = async () => {
         await mongoose.connect(process.env.MONGO_URI);
         console.log("DB Connected");
 
-        // Self-heal: Clear any stale payroll generation locks on fresh boot
         try {
-            const MAX_LOCK_AGE = 30 * 60 * 1000; // 30 minutes
+            const MAX_LOCK_AGE = 30 * 60 * 1000;
             const staleThreshold = new Date(Date.now() - MAX_LOCK_AGE);
 
             await PayrollSettings.updateOne(
