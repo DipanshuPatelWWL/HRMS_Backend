@@ -16,6 +16,7 @@ const {
     getLeaveBalance,
     getEmployeesLeaveBalances,
     updateEmployeeLeaveBalance,
+    getProbationStatus,
 } = require("../controllers/leave.controller");
 
 // Employee views own leave balance
@@ -25,6 +26,15 @@ router.get(
     allowRoles("employee", "tl", "manager", "hr", "superadmin"),
     getLeaveBalance
 );
+
+// Employee checks their own probation status
+router.get(
+    "/probation-status",
+    protect,
+    allowRoles("employee", "tl", "manager", "hr", "superadmin"),
+    getProbationStatus
+);
+
 
 // Employee applies leave
 router.post(

@@ -6,6 +6,22 @@ const Holiday = require("../models/holiday.model");
 const { notifyLeaveApplied: notifyLeaveAppliedEmail, notifyLeaveApproved, notifyLeaveRejected } = require("../services/emailNotify");
 const moment = require("moment-timezone");
 
+
+// ─────────────────────────────────────────────
+//  PROBATION HELPERS
+// ─────────────────────────────────────────────
+const PROBATION_MONTHS = 3;
+
+const getProbationEnd = (joiningDate) => {
+    return moment.tz(joiningDate, "Asia/Kolkata").add(PROBATION_MONTHS, "months");
+};
+
+const isUserOnProbation = (joiningDate) => {
+    if (!joiningDate) return false;
+    return moment.tz("Asia/Kolkata").isBefore(getProbationEnd(joiningDate));
+};
+
+
 // ─────────────────────────────────────────────
 //  HELPER — count working days in a range
 //  (excludes weekends and holidays)
@@ -103,6 +119,15 @@ const applyLeave = async (req, res) => {
         const userId = req.user._id;
         const userName = req.user.name;
         const employeeId = req.user.employeeId;
+
+        // ── Block leave applications during probation ──
+        if (isUserOnProbation(req.user.joiningDate)) {
+            const probationEnd = getProbationEnd(req.user.joiningDate).format("DD MMM YYYY");
+            return res.status(403).json({
+                success: false,
+                message: `You're currently on probation. Leave applications will be available from ${probationEnd}.`,
+            });
+        }
 
         const {
             type,
@@ -923,6 +948,27 @@ const updateEmployeeLeaveBalance = async (req, res) => {
 };
 
 
+// ─────────────────────────────────────────────
+//  GET PROBATION STATUS (Employee)
+// ─────────────────────────────────────────────
+const getProbationStatus = async (req, res) => {
+    try {
+        const onProbation = isUserOnProbation(req.user.joiningDate);
+        const probationEndDate = req.user.joiningDate
+            ? getProbationEnd(req.user.joiningDate).toDate()
+            : null;
+
+        res.status(200).json({
+            success: true,
+            onProbation,
+            probationEndDate,
+            joiningDate: req.user.joiningDate,
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = {
     applyLeave,
     getMyLeaves,
@@ -936,4 +982,5 @@ module.exports = {
     getLeaveBalance,
     getEmployeesLeaveBalances,
     updateEmployeeLeaveBalance,
+    getProbationStatus,
 };
