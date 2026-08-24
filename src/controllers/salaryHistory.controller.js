@@ -9,11 +9,15 @@ const round2 = (n) => Math.round(n * 100) / 100;
 // HR can only manage/view employee & tl salaries.
 // Manager/superadmin can view/manage everyone, including HR.
 function canAccessSalary(reqUser, targetUser) {
-    if (["manager", "superadmin"].includes(reqUser.role)) return true;
-    if (reqUser.role === "hr") return ["employee", "tl"].includes(targetUser.role);
+    if (["manager", "superadmin"].includes(reqUser.role)) {
+        return true;
+    }
+    if (reqUser.role === "hr") {
+        return ["employee", "tl"].includes(targetUser.role);
+    }
+
     return false;
 }
-
 // ─────────────────────────────────────────────
 //  RECORD A SALARY INCREMENT
 //  POST /users/:id/salary-increment

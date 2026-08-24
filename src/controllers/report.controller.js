@@ -247,7 +247,7 @@ const getHRDashboardStats = async (req, res) => {
             payrollCount
         ] = await Promise.all([
             User.countDocuments({
-                role: { $in: ["employee", "tl", "hr", "manager"] },
+                role: { $in: ["employee", "tl", "hr", "manager", "superadmin"] },
                 status: { $ne: "terminated" },
             }),
 
@@ -332,7 +332,7 @@ const getHRDashboardStats = async (req, res) => {
         const thirtyDaysAgo = nowIST.clone().subtract(30, "days").toDate();
 
         const inactive30 = await User.countDocuments({
-            role: { $in: ["employee", "tl", "hr", "manager"] },
+            role: { $in: ["employee", "tl", "hr", "manager", "superadmin"] },
             status: "inactive",
             updatedAt: { $gte: thirtyDaysAgo },
         });
@@ -371,7 +371,7 @@ const getHRDashboardStats = async (req, res) => {
             ]),
 
             User.find({
-                role: { $in: ["employee", "tl", "hr", "manager"] }
+                role: { $in: ["employee", "tl", "hr", "manager", "superadmin"] }
             }).select("name dob joiningDate employeeId")
         ]);
 

@@ -39,7 +39,7 @@ const getMonthlySalary = async (req, res) => {
         }
 
         // ── Access control ────────────────────────────
-        const isAdminViewer = ["hr", "manager"].includes(req.user.role);
+        const isAdminViewer = ["hr", "manager", "superadmin"].includes(req.user.role);
         if (!isAdminViewer) {
             if (req.user._id.toString() !== userId) {
                 return res.status(403).json({

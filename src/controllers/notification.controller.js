@@ -132,7 +132,7 @@ const getMyNotifications = async (req, res) => {
     try {
         const { role, _id: userId } = req.user;
 
-        if (role === "hr" || role === "manager" || role === "admin") {
+        if (role === "hr" || role === "manager" || role === "superadmin") {
             const data = await Notification.find({ user: userId })
                 .sort({ createdAt: -1 })
                 .limit(100)
@@ -167,7 +167,7 @@ const getUnreadCount = async (req, res) => {
 
         let query;
 
-        if (role === "hr" || role === "manager" || role === "admin") {
+        if (role === "hr" || role === "manager" || role === "superadmin") {
             query = { isRead: false, user: userId };
         } else if (role === "tl") {
             query = { isRead: false, user: userId };
@@ -203,7 +203,7 @@ const markAllRead = async (req, res) => {
 
         let filter;
 
-        if (role === "hr" || role === "manager" || role === "admin") {
+        if (role === "hr" || role === "manager" || role === "superadmin") {
             filter = { isRead: false, user: userId };
         } else if (role === "tl") {
             filter = { isRead: false, user: userId };
@@ -225,7 +225,7 @@ const clearAll = async (req, res) => {
 
         let filter;
 
-        if (role === "hr" || role === "manager" || role === "admin") {
+        if (role === "hr" || role === "manager" || role === "superadmin") {
             filter = { user: userId };
         } else if (role === "tl") {
             filter = { user: userId };

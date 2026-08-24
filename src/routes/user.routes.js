@@ -60,7 +60,7 @@ router.put("/me/bank-details", protect, updateBankDetails);
 router.put(
     "/me/preferences",
     protect,
-    allowRoles("hr", "manager", "tl", "employee"),
+    allowRoles("hr", "manager", "tl", "employee", "superadmin"),
     manageShiftReminder
 )
 
@@ -74,9 +74,10 @@ router.post(
 
 
 
-router.get("/archived", protect, allowRoles("hr", "manager"), getArchivedEmployees);
-router.get("/terminated", protect, allowRoles("hr", "manager"), getTerminatedEmployees);
-router.get("/:id/history", protect, allowRoles("hr", "manager", "tl"), getEmployeeHistory);
+
+router.get("/archived", protect, allowRoles("hr", "manager", "superadmin"), getArchivedEmployees);
+router.get("/terminated", protect, allowRoles("hr", "manager", "superadmin"), getTerminatedEmployees);
+router.get("/:id/history", protect, allowRoles("hr", "manager", "tl", "superadmin"), getEmployeeHistory);
 
 
 
@@ -191,7 +192,7 @@ router.put(
 router.get(
     "/sales-users",
     protect,
-    allowRoles("manager"),
+    allowRoles("manager", "superadmin"),
     getSalesUsers
 );
 
@@ -204,7 +205,7 @@ router.get(
     getAllUsers
 );
 
-router.get("/list", protect, allowRoles("hr", "manager"), getUserList);
+router.get("/list", protect, allowRoles("hr", "manager","superadmin"), getUserList);
 
 router.get(
     "/:id",

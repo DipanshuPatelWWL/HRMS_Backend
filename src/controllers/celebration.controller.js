@@ -30,28 +30,57 @@ const createCelebration = async (req, res) => {
             });
         }
 
-        const employee = await User.findById(employeeId);
+        const employee = await User.findOne({
+            _id: employeeId,
+            status: "active",
+        });
         if (!employee) {
             return res.status(404).json({
                 success: false,
-                message: "Employee not found",
+                message: "Employee not found or employee is not active",
             });
         }
 
-        // Strip the employee from recipients to prevent duplicate emails
-        const cleanedRecipients = Array.isArray(recipients)
-            ? recipients.filter(r => r?.toString() !== employeeId?.toString())
-            : [];
+        // Only allow active users as recipients
+        let cleanedRecipients = [];
+
+        if (Array.isArray(recipients) && recipients.length > 0) {
+            const activeRecipients = await User.find({
+                _id: { $in: recipients },
+                status: "active",
+            }).select("_id");
+
+            const activeRecipientIds = activeRecipients.map(
+                user => user._id.toString()
+            );
+
+            // Remove the main employee to prevent duplicate emails
+            cleanedRecipients = activeRecipientIds;
+        }
+
+        // Convert the selected date/time from IST to a proper UTC Date
+        const scheduledDateIST = moment.tz(
+            scheduledAt,
+            "YYYY-MM-DDTHH:mm",
+            "Asia/Kolkata"
+        );
+
+        if (!scheduledDateIST.isValid()) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid scheduled date and time",
+            });
+        }
 
         const celebrationData = {
             employeeId,
             eventType,
-            sendToEmployee,
-            sendToOthers,
+            sendToEmployee: sendToEmployee ?? true,
+            sendToOthers: sendToOthers ?? false,
             recipients: cleanedRecipients,
-            customMessage,
-            uploadedImage,
-            scheduledAt,
+            customMessage: customMessage || "",
+            uploadedImage: uploadedImage || "",
+            scheduledAt: scheduledDateIST.toDate(),
             templateStyle: templateStyle || "dark_purple",
         };
 
@@ -61,6 +90,32 @@ const createCelebration = async (req, res) => {
         }
 
         const celebration = await Celebration.create(celebrationData);
+
+        // Create delivery records for every selected active recipient
+        const recipientDelivery = [];
+
+        if (cleanedRecipients.length > 0) {
+            const selectedUsers = await User.find({
+                _id: { $in: cleanedRecipients },
+                status: "active",
+            }).select("_id email");
+
+            for (const user of selectedUsers) {
+                if (!user.email) continue;
+
+                recipientDelivery.push({
+                    userId: user._id,
+                    email: user.email,
+                    status: "pending",
+                    attempts: 0,
+                });
+            }
+        }
+
+        // Save recipient delivery tracking
+        celebration.recipientDelivery = recipientDelivery;
+
+        await celebration.save();
 
         res.status(201).json({
             success: true,
@@ -123,14 +178,14 @@ const getUpcomingCelebrations = async (req, res) => {
 
                 // Only show if they've worked at least 1 year
                 let yearsWorked = nowIST.year() - joining.year();
-                
+
                 // If anniversary hasn't happened yet this year, use previous year's anniversary to calculate yearsWorked
                 let nextAnniversary = joining.clone().year(nowIST.year());
-                
+
                 if (nextAnniversary.isBefore(todayMidnight, "day")) {
                     nextAnniversary.year(nowIST.year() + 1);
                 }
-                
+
                 const finalYearsWorked = nextAnniversary.year() - joining.year();
                 if (finalYearsWorked < 1) return;
 
@@ -251,14 +306,23 @@ const deleteCelebration = async (req, res) => {
 const getAllCelebrations = async (req, res) => {
     try {
         const celebrations = await Celebration.find()
-            .populate("employeeId", "name email avatar")
+            .populate({
+                path: "employeeId",
+                select: "name email avatar status",
+                match: { status: "active" },
+            })
             .populate("templateId", "templateName")
             .sort({ scheduledAt: 1 });
 
+        // Remove celebrations where the employee is no longer active
+        const activeCelebrations = celebrations.filter(
+            celebration => celebration.employeeId
+        );
+
         res.status(200).json({
             success: true,
-            count: celebrations.length,
-            celebrations,
+            count: activeCelebrations.length,
+            celebrations: activeCelebrations,
         });
 
     } catch (error) {

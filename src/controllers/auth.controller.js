@@ -272,7 +272,7 @@ const login = async (req, res) => {
 
                     // Notify HR
                     const hrUsers = await User.find({
-                        role: { $in: ["hr", "manager"] },
+                        role: { $in: ["hr", "manager", "superadmin"] },
                         status: "active"
                     }).select("_id").lean();
 

@@ -22,7 +22,7 @@ const announcementSchema = new mongoose.Schema(
 
         targetRole: {
             type: String,
-            enum: ["all", "employee", "hr", "manager", "tl"],
+            enum: ["all", "employee", "hr", "manager", "tl", "superadmin"],
             default: "all",
         },
 

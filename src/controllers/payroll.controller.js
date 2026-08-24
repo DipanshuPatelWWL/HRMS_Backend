@@ -79,7 +79,31 @@ const generatePayroll = async (req, res) => {
         const io = req.app.get("io");
 
         if (!month || !year) {
-            return res.status(400).json({ success: false, message: "month and year are required" });
+            return res.status(400).json({
+                success: false,
+                message: "month and year are required"
+            });
+        }
+
+        const generatorRole = req.user.role;
+
+        const allowedTargetRoles = {
+            hr: ["employee", "tl"],
+            manager: ["employee", "tl", "hr"],
+            superadmin: [
+                "employee",
+                "tl",
+                "hr",
+                "manager",
+                "superadmin",
+            ],
+        };
+
+        if (!allowedTargetRoles[generatorRole]) {
+            return res.status(403).json({
+                success: false,
+                message: "You are not authorized to generate payroll",
+            });
         }
 
         const m = parseInt(month);
@@ -101,33 +125,99 @@ const generatePayroll = async (req, res) => {
         // }
 
         let users;
+
         if (employeeId) {
             const u = await User.findById(employeeId);
-            if (!u) return res.status(404).json({ success: false, message: "Employee not found" });
+
+            if (!u) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Employee not found"
+                });
+            }
+
+            if (!allowedTargetRoles[generatorRole].includes(u.role)) {
+                return res.status(403).json({
+                    success: false,
+                    message: `You are not authorized to generate payroll for ${u.role}`,
+                });
+            }
+
+            if (
+                generatorRole !== "superadmin" &&
+                u._id.toString() === req.user._id.toString()
+            ) {
+                return res.status(403).json({
+                    success: false,
+                    message: "You cannot generate your own payroll",
+                });
+            }
+
             users = [u];
         } else {
             // Boundaries of the payroll period being generated (IST)
-            const periodStart = moment.tz(`${y}-${m}-01`, "YYYY-M-DD", "Asia/Kolkata").startOf("day").toDate();
-            const periodEnd = moment.tz(`${y}-${m}-01`, "YYYY-M-DD", "Asia/Kolkata").endOf("month").toDate();
+            const periodStart = moment
+                .tz(`${y}-${m}-01`, "YYYY-M-DD", "Asia/Kolkata")
+                .startOf("day")
+                .toDate();
+
+            const periodEnd = moment
+                .tz(`${y}-${m}-01`, "YYYY-M-DD", "Asia/Kolkata")
+                .endOf("month")
+                .toDate();
+
+            // HR:
+            //   Employee + TL
+            //
+            // Manager:
+            //   Employee + TL + HR
+            //
+            // Superadmin:
+            //   Everyone
+            const targetRoles = allowedTargetRoles[generatorRole];
+
             users = await User.find({
-                role: { $in: ["employee", "tl"] },
+                role: { $in: targetRoles },
+
                 "salary.monthly": { $gt: 0 },
-                joiningDate: { $lte: periodEnd },
+
+                joiningDate: {
+                    $lte: periodEnd
+                },
+
                 $and: [
                     {
-                        // Exclude anyone whose exitDate OR relievingDate falls
-                        // before this payroll period — either field being set
-                        // and before periodStart is enough to exclude them.
+                        // Exclude employees who left before
+                        // the payroll period started.
                         $nor: [
-                            { exitDate: { $lt: periodStart } },
-                            { relievingDate: { $lt: periodStart } },
+                            {
+                                exitDate: {
+                                    $lt: periodStart
+                                }
+                            },
+                            {
+                                relievingDate: {
+                                    $lt: periodStart
+                                }
+                            },
                         ],
                     },
+
                     {
                         $or: [
-                            { deletedAt: null },
-                            { deletedAt: { $exists: false } },
-                            { deletedAt: { $gte: periodStart } },
+                            {
+                                deletedAt: null
+                            },
+                            {
+                                deletedAt: {
+                                    $exists: false
+                                }
+                            },
+                            {
+                                deletedAt: {
+                                    $gte: periodStart
+                                }
+                            },
                         ],
                     },
                 ],
@@ -209,14 +299,42 @@ const getAllPayrolls = async (req, res) => {
         if (year) filter.year = parseInt(year);
         if (status) filter.status = status;
 
+        let employeeMatch = {};
+
+        if (req.user.role === "hr") {
+            employeeMatch = {
+                role: { $in: ["employee", "tl"] }
+            };
+        } else if (req.user.role === "manager") {
+            employeeMatch = {
+                role: { $in: ["employee", "tl", "hr"] }
+            };
+        } else if (req.user.role === "superadmin") {
+            employeeMatch = {
+                role: {
+                    $in: [
+                        "employee",
+                        "tl",
+                        "hr",
+                        "manager",
+                        "superadmin"
+                    ]
+                }
+            };
+        }
+
         const payrolls = await Payroll.find(filter)
             .populate({
                 path: "employee",
-                match: { role: { $nin: ["manager", "superadmin"] } },
+                match: employeeMatch,
                 select: "name email employeeId guardianName fatherName parentName department designation role joiningDate dob salary bankDetails governmentId exitDate relievingDate deletedAt"
             })
             .populate("paidBy", "name")
-            .sort({ year: -1, month: -1, createdAt: -1 });
+            .sort({
+                year: -1,
+                month: -1,
+                createdAt: -1
+            });
 
         const filteredPayrolls = payrolls.filter(p => {
             if (!p.employee) return false;
@@ -384,19 +502,48 @@ const deletePayroll = async (req, res) => {
 const getMyPayrolls = async (req, res) => {
     try {
         // Employees only see released payrolls; HR/Manager see all their own
-        const isAdminViewer = ["hr", "manager"].includes(req.user.role);
+        const isAdminViewer = ["hr", "manager", "superadmin"].includes(req.user.role);
         const filter = { employee: req.user._id };
         if (!isAdminViewer) {
             filter.isReleased = true;
         }
 
+        let employeeMatch = {};
+
+        if (req.user.role === "hr") {
+            employeeMatch = {
+                role: { $in: ["employee", "tl"] }
+            };
+        } else if (req.user.role === "manager") {
+            employeeMatch = {
+                role: { $in: ["employee", "tl", "hr"] }
+            };
+        } else if (req.user.role === "superadmin") {
+            employeeMatch = {
+                role: {
+                    $in: [
+                        "employee",
+                        "tl",
+                        "hr",
+                        "manager",
+                        "superadmin"
+                    ]
+                }
+            };
+        }
+
         const payrolls = await Payroll.find(filter)
-            .populate(
-                "employee",
-                "name email employeeId guardianName fatherName parentName department designation role joiningDate dob salary bankDetails governmentId"
-            )
+            .populate({
+                path: "employee",
+                match: employeeMatch,
+                select: "name email employeeId guardianName fatherName parentName department designation role joiningDate dob salary bankDetails governmentId exitDate relievingDate deletedAt"
+            })
             .populate("paidBy", "name")
-            .sort({ year: -1, month: -1 });
+            .sort({
+                year: -1,
+                month: -1,
+                createdAt: -1
+            });
 
         res.json({ success: true, count: payrolls.length, payrolls });
     } catch (error) {
@@ -418,11 +565,17 @@ const getPayroll = async (req, res) => {
 
         if (!payroll) return res.status(404).json({ success: false, message: "Payroll not found" });
 
-        const isOwner = payroll.employee._id.toString() === req.user._id.toString();
-        const isHR = ["hr", "manager"].includes(req.user.role);
+        const isOwner =
+            payroll.employee._id.toString() === req.user._id.toString();
 
-        if (!isOwner && !isHR) {
-            return res.status(403).json({ success: false, message: "Not authorized" });
+        const isPayrollAdmin =
+            ["hr", "manager", "superadmin"].includes(req.user.role);
+
+        if (!isOwner && !isPayrollAdmin) {
+            return res.status(403).json({
+                success: false,
+                message: "Not authorized"
+            });
         }
 
         // Employee can only view if payroll is released (paid)

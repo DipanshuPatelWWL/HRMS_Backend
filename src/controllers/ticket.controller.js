@@ -37,7 +37,7 @@ const createTicket = async (req, res) => {
             const io = req.app.get("io");
             await broadcastNotification(
                 io,
-                ["hr", "manager"],
+                ["hr", "manager", "superadmin"],
                 `New Ticket: ${title}`,
                 `${populated.user.name} raised a helpdesk ticket`,
                 "ticket_replied",
@@ -212,7 +212,7 @@ const addReply = async (req, res) => {
                 // Employee replied → notify HR & managers
                 await broadcastNotification(
                     io,
-                    ["hr", "manager"],
+                    ["hr", "manager", "superadmin"],
                     `Employee replied on ticket`,
                     `New reply on: "${ticket.title}"`,
                     "ticket_replied",

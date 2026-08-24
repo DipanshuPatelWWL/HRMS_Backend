@@ -318,7 +318,7 @@ const punchIn = async (req, res) => {
                     }).catch(err => console.error("Email error:", err));
                 }
 
-                const notifyUsersRaw = await User.find({ $or: [{ role: { $in: ["hr", "manager", "admin"] } }, ...(userDoc?.reportingTo ? [{ _id: userDoc.reportingTo }] : [])] }).select("_id").lean();
+                const notifyUsersRaw = await User.find({ $or: [{ role: { $in: ["hr", "manager", "superadmin"] } }, ...(userDoc?.reportingTo ? [{ _id: userDoc.reportingTo }] : [])] }).select("_id").lean();
                 const notifyIdSet = new Set(notifyUsersRaw.map(u => u._id.toString()).filter(sid => sid !== userId.toString()));
                 await Promise.allSettled([...notifyIdSet].map(sid => createNotification(io, sid, `${employeeName} Punched In`, `Punched in at ${punchTime} — ${statusLabel}`, "attendance", { userId, attendanceId: attendance._id, status, isLate, isHalfDay })));
             } catch (err) { console.error(err); }
@@ -468,7 +468,7 @@ const punchOut = async (req, res) => {
 
         const employeeDoc = await User.findById(userId).select("reportingTo").lean();
         const notifyUsersRaw = await User.find({
-            $or: [{ role: { $in: ["hr", "manager", "admin"] } }, ...(employeeDoc?.reportingTo ? [{ _id: employeeDoc.reportingTo }] : [])]
+            $or: [{ role: { $in: ["hr", "manager", "superadmin"] } }, ...(employeeDoc?.reportingTo ? [{ _id: employeeDoc.reportingTo }] : [])]
         }).select("_id");
         const notifyIdSet = new Set();
         for (const u of notifyUsersRaw) {

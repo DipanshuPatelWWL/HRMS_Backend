@@ -283,7 +283,7 @@ const applyLeave = async (req, res) => {
         if (skipTL) {
             broadcastNotification(
                 io,
-                ["hr", "manager"],
+                ["hr", "manager","superadmin"],
                 "New Leave Request 📋",
                 `${userName} applied for ${type} leave (${totalDays} day${totalDays > 1 ? "s" : ""})`,
                 "leave_applied",

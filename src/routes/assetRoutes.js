@@ -18,7 +18,7 @@ const {
     scanAssetBarcode,
 } = require("../controllers/asset.controller");
 
-const HR_ROLES = ["hr", "manager"];
+const HR_ROLES = ["hr", "manager", "superadmin"];
 
 // ─── Employee self-view ───────────────────────────────────────────────────────
 // GET /api/assets/me

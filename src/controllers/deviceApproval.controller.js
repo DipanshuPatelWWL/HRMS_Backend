@@ -85,7 +85,7 @@ const requestDeviceApproval = async (req, res) => {
         const io = req.app.get("io");
         await broadcastNotification(
             io,
-            ["hr", "manager"],
+            ["hr", "manager","superadmin"],
             "Device Approval Request 🖥️",
             `${req.user.name} requested approval to punch in from a new device`,
             "device_approval",

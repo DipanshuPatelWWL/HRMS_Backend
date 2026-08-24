@@ -29,27 +29,39 @@ const processCelebrations = async () => {
         // Atomically claim ALL due pending celebrations in one shot
         // by updating their status to "processing" before we loop
         // This prevents any other tick from picking them up
-        const claimResult = await Celebration.updateMany(
-            {
-                status: "pending",
-                scheduledAt: { $lte: now },
-            },
-            { $set: { status: "processing" } }
-        );
+        const celebrations = [];
 
-        if (claimResult.modifiedCount === 0) {
+        while (true) {
+            const celebration = await Celebration.findOneAndUpdate(
+                {
+                    status: "pending",
+                    scheduledAt: { $lte: new Date() },
+                },
+                {
+                    $set: {
+                        status: "processing",
+                    },
+                },
+                {
+                    new: true,
+                    sort: { scheduledAt: 1 },
+                }
+            )
+                .populate("employeeId")
+                .populate("templateId")
+                .populate("recipients");
+
+            if (!celebration) {
+                break;
+            }
+
+            celebrations.push(celebration);
+        }
+
+        if (celebrations.length === 0) {
             isProcessing = false;
             return;
         }
-
-        // Now fetch only the ones WE just claimed
-        const celebrations = await Celebration.find({
-            status: "processing",
-            sentAt: null,   // ← never re-process already-sent ones
-        })
-            .populate("employeeId")
-            .populate("templateId")
-            .populate("recipients");
 
         for (const celebration of celebrations) {
 
@@ -117,16 +129,55 @@ const processCelebrations = async () => {
                 // SEND TO SELECTED RECIPIENTS ONLY
                 // ─────────────────────────
 
-                if (celebration.recipients?.length > 0) {
+                const recipientEmails = new Set();
+
+                // Send to employee if enabled
+                if (celebration.sendToEmployee && employee?.email) {
+                    recipientEmails.add(employee.email);
+                }
+
+                // Send to selected recipients if enabled
+                if (celebration.sendToOthers && celebration.recipients?.length > 0) {
                     for (const recipient of celebration.recipients) {
-                        if (!recipient?.email) continue;
-                        await sendCelebrationMail({ to: recipient.email, subject, html });
+                        if (recipient?.email) {
+                            recipientEmails.add(recipient.email);
+                        }
                     }
-                } else {
-                    // Fallback — no recipients selected, send to employee only
-                    if (employee.email) {
-                        await sendCelebrationMail({ to: employee.email, subject, html });
-                    }
+                }
+
+                if (recipientEmails.size === 0) {
+                    throw new Error("No valid recipients found for this celebration");
+                }
+
+                const emailResults = await Promise.allSettled(
+                    [...recipientEmails].map(email =>
+                        sendCelebrationMail({
+                            to: email,
+                            subject,
+                            html,
+                        })
+                    )
+                );
+
+                const failedEmails = emailResults
+                    .map((result, index) => ({
+                        result,
+                        email: [...recipientEmails][index],
+                    }))
+                    .filter(item => item.result.status === "rejected");
+
+                if (failedEmails.length > 0) {
+                    console.error(
+                        "[CelebrationCron] Some emails failed:",
+                        failedEmails.map(item => ({
+                            email: item.email,
+                            error: item.result.reason?.message || item.result.reason,
+                        }))
+                    );
+
+                    throw new Error(
+                        `${failedEmails.length} recipient email(s) failed`
+                    );
                 }
 
                 // ─────────────────────────
@@ -153,8 +204,16 @@ const processCelebrations = async () => {
         // roll any stuck "processing" docs back to "pending"
         // so they can be retried next run
         await Celebration.updateMany(
-            { status: "processing", sentAt: null },
-            { $set: { status: "failed" } }
+            {
+                status: "processing",
+                sentAt: null,
+                scheduledAt: { $lte: new Date() },
+            },
+            {
+                $set: {
+                    status: "pending",
+                },
+            }
         ).catch(() => { });
 
     } finally {

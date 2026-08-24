@@ -25,7 +25,7 @@ router.get(
 router.post(
     "/",
     protect,
-    allowRoles("employee", "tl", "manager", "hr"),
+    allowRoles("employee", "tl", "manager", "hr", "superadmin"),
     applyCorrection
 );
 
@@ -33,7 +33,7 @@ router.post(
 router.get(
     "/my",
     protect,
-    allowRoles("employee", "tl", "manager", "hr"),
+    allowRoles("employee", "tl", "manager", "hr", "superadmin"),
     getMyCorrections
 );
 

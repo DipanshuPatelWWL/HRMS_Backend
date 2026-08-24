@@ -101,7 +101,7 @@ router.get(
 router.put(
     "/:id/release",
     protect,
-    allowRoles("hr", "manager"),
+    allowRoles("hr", "manager", "superadmin"),
     releasePayroll
 );
 

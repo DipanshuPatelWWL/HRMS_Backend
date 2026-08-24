@@ -21,7 +21,7 @@ const {
 router.post(
     "/log",
     protect,
-    allowRoles("employee", "tl", "manager", "hr"),
+    allowRoles("employee", "tl", "manager", "hr", "superadmin"),
     logActivity
 );
 
@@ -29,7 +29,7 @@ router.post(
 router.get(
     "/my-activity",
     protect,
-    allowRoles("employee", "tl", "manager", "hr"),
+    allowRoles("employee", "tl", "manager", "hr", "superadmin"),
     getMyActivity
 );
 
@@ -80,7 +80,7 @@ router.post(
 router.post(
     "/capture-upload",
     protect,
-    allowRoles("employee", "tl", "manager", "hr"),
+    allowRoles("employee", "tl", "manager", "hr", "superadmin"),
     uploadCapture
 );
 

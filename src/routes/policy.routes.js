@@ -14,17 +14,17 @@ router.get("/my", protect, getMyPolicies);
 router.post("/acknowledge", protect, acknowledgePolicies);
 
 // ── HR / Manager routes ───────────────────────────────────────
-router.post("/", protect, allowRoles("hr", "manager"), createPolicy);
-router.get("/", protect, allowRoles("hr", "manager"), getAllPolicies);
+router.post("/", protect, allowRoles("hr", "manager", "superadmin"), createPolicy);
+router.get("/", protect, allowRoles("hr", "manager", "superadmin"), getAllPolicies);
 
 // ── Dynamic /:policyId routes LAST ───────────────────────────
-router.get("/:policyId/responses", protect, allowRoles("hr", "manager"), getPolicyResponses);
-router.post("/:policyId/publish", protect, allowRoles("hr", "manager"), publishPolicy);
-router.patch("/:policyId/archive", protect, allowRoles("hr", "manager"), archivePolicy);
-router.patch("/:policyId/archive", protect, allowRoles("hr", "manager"), archivePolicy);
-router.patch("/:policyId/restore", protect, allowRoles("hr", "manager"), restorePolicy);
-router.delete("/:policyId", protect, allowRoles("hr", "manager"), deletePolicy);
-router.put("/:policyId", protect, allowRoles("hr", "manager"), updatePolicy);
+router.get("/:policyId/responses", protect, allowRoles("hr", "manager", "superadmin"), getPolicyResponses);
+router.post("/:policyId/publish", protect, allowRoles("hr", "manager", "superadmin"), publishPolicy);
+router.patch("/:policyId/archive", protect, allowRoles("hr", "manager", "superadmin"), archivePolicy);
+router.patch("/:policyId/archive", protect, allowRoles("hr", "manager", "superadmin"), archivePolicy);
+router.patch("/:policyId/restore", protect, allowRoles("hr", "manager", "superadmin"), restorePolicy);
+router.delete("/:policyId", protect, allowRoles("hr", "manager", "superadmin"), deletePolicy);
+router.put("/:policyId", protect, allowRoles("hr", "manager", "superadmin"), updatePolicy);
 router.get("/:policyId", protect, getPolicyById);
 
 module.exports = router;

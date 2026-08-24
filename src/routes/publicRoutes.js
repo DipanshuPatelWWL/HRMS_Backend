@@ -26,7 +26,7 @@ const publicLimiter = rateLimit({
 router.get(
     "/scan-logs/stats",
     protect,
-    allowRoles("manager", "hr"),
+    allowRoles("manager", "hr", "superadmin"),
     async (req, res) => {
         try {
             const [total, uniqueEmployees, deviceBreakdown, topCountries] = await Promise.all([
@@ -143,7 +143,7 @@ router.get("/public/employee/:employeeId", publicLimiter, async (req, res) => {
 router.get(
     "/scan-logs",
     protect,
-    allowRoles("manager", "hr"),
+    allowRoles("manager", "hr", "superadmin"),
     async (req, res) => {
         try {
             const page = parseInt(req.query.page) || 1;
@@ -193,7 +193,7 @@ router.get(
 router.get(
     "/scan-logs/:employeeId",
     protect,
-    allowRoles("manager", "hr"),
+    allowRoles("manager", "hr", "superadmin"),
     async (req, res) => {
         try {
             const logs = await ScanLog.find({ employeeId: req.params.employeeId })
@@ -211,7 +211,7 @@ router.get(
 router.delete(
     "/scan-logs/:id",
     protect,
-    allowRoles("manager", "hr"),
+    allowRoles("manager", "hr", "superadmin"),
     async (req, res) => {
         try {
             await ScanLog.findByIdAndDelete(req.params.id);

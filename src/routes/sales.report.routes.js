@@ -82,7 +82,7 @@ router.get(
 router.get(
     "/manager/leads",
     protect,
-    allowRoles("manager"),
+    allowRoles("manager", "superadmin"),
     getManagerLeads
 );
 
@@ -90,7 +90,7 @@ router.get(
 router.get(
     "/manager/deleted-leads",
     protect,
-    allowRoles("manager"),
+    allowRoles("manager", "superadmin"),
     getManagerLeads
 );
 

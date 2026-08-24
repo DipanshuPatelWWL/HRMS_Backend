@@ -88,7 +88,15 @@ app.use((req, res, next) => {
     res.setHeader("Connection", "keep-alive");
     next();
 });
-app.use("/uploads", express.static("uploads"));
+
+app.use(
+    "/uploads",
+    (req, res, next) => {
+        res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+        next();
+    },
+    express.static("uploads")
+);
 app.use("/updates", express.static("updates"));
 
 const io = new Server(server, {

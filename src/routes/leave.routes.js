@@ -40,7 +40,7 @@ router.get(
 router.post(
     "/apply",
     protect,
-    allowRoles("employee", "tl", "manager", "hr"),
+    allowRoles("employee", "tl", "manager", "hr", "superadmin"),
     applyLeave
 );
 
@@ -48,7 +48,7 @@ router.post(
 router.get(
     "/my",
     protect,
-    allowRoles("employee", "tl", "manager", "hr"),
+    allowRoles("employee", "tl", "manager", "hr", "superadmin"),
     getMyLeaves
 );
 
@@ -72,7 +72,7 @@ router.put(
 router.put(
     "/manager-approve/:id",
     protect,
-    allowRoles("manager"),
+    allowRoles("manager", "superadmin"),
     approveByManager
 );
 
@@ -88,7 +88,7 @@ router.put(
 router.put(
     "/cancel/:id",
     protect,
-    allowRoles("employee", "tl", "manager", "hr"),
+    allowRoles("employee", "tl", "manager", "hr", "superadmin"),
     cancelLeave
 );
 
@@ -113,7 +113,7 @@ router.delete(
 router.get(
     "/balances/all",
     protect,
-    allowRoles("hr", "manager"),
+    allowRoles("hr", "manager", "superadmin"),
     getEmployeesLeaveBalances
 );
 
@@ -121,7 +121,7 @@ router.get(
 router.put(
     "/balance/:userId",
     protect,
-    allowRoles("hr", "manager"),
+    allowRoles("hr", "manager", "superadmin"),
     updateEmployeeLeaveBalance
 );
 

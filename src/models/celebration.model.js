@@ -38,10 +38,48 @@ const celebrationSchema = new mongoose.Schema(
             },
         ],
 
+        recipientDelivery: [
+            {
+                userId: {
+                    type: mongoose.Schema.Types.ObjectId,
+                    ref: "User",
+                    default: null,
+                },
+
+                email: {
+                    type: String,
+                    required: true,
+                },
+
+                status: {
+                    type: String,
+                    enum: ["pending", "sent", "failed"],
+                    default: "pending",
+                },
+
+                attempts: {
+                    type: Number,
+                    default: 0,
+                },
+
+                sentAt: {
+                    type: Date,
+                    default: null,
+                },
+
+                lastError: {
+                    type: String,
+                    default: "",
+                },
+            },
+        ],
+
         customMessage: {
             type: String,
             default: "",
         },
+
+        
         uploadedImage: {
             type: String,
             default: "",

@@ -240,7 +240,7 @@ const applyCorrection_handler = async (req, res) => {
         const io = req.app.get("io");
         await broadcastNotification(
             io,
-            ["hr", "manager"],
+            ["hr", "manager","superadmin"],
             "Attendance Correction Request 📋",
             `${req.user.name} requested a ${type.replace("_", "-")} correction for ${correctionDate.toDateString()}`,
             "attendance",
@@ -402,7 +402,7 @@ const deleteCorrection = async (req, res) => {
         }
 
         const isOwner = correction.user.toString() === req.user._id.toString();
-        const isHR = ["hr", "manager"].includes(req.user.role);
+        const isHR = ["hr", "manager", "superadmin"].includes(req.user.role);
 
         if (!isOwner && !isHR) {
             return res.status(403).json({ success: false, message: "Not allowed" });

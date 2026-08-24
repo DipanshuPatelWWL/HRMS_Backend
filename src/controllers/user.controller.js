@@ -58,16 +58,36 @@ const createUserByHR = async (req, res) => {
 
         const allowedRolesByCreator = {
             hr: ["employee", "tl"],
-            manager: ["employee", "tl", "hr", "manager"],
-            superadmin: ["employee", "tl", "hr", "manager", "superadmin"],
+            manager: ["employee", "tl", "hr"],
+            superadmin: [
+                "employee",
+                "tl",
+                "hr",
+                "manager",
+                "superadmin",
+            ],
         };
-        const creatorRole = req.user.role;
-        const targetRole = role || "employee";
+
+        const creatorRole = req.user.role?.toLowerCase();
+        const targetRole = (role || "employee").toLowerCase();
+
         const permitted = allowedRolesByCreator[creatorRole] || [];
+
         if (!permitted.includes(targetRole)) {
             return res.status(403).json({
                 success: false,
                 message: `${creatorRole.toUpperCase()} cannot create a user with role "${targetRole}"`,
+            });
+        }
+
+        // HR cannot select/use HR department
+        if (
+            creatorRole === "hr" &&
+            department?.toLowerCase() === "hr"
+        ) {
+            return res.status(403).json({
+                success: false,
+                message: "HR cannot create a user under the HR department",
             });
         }
         // ─────────────────────────────────────────────────────
@@ -75,6 +95,14 @@ const createUserByHR = async (req, res) => {
         const existingUser = await User.findOne({ email });
         if (existingUser) {
             return res.status(400).json({ success: false, message: "User already exists" });
+        }
+
+        // Manager / Superadmin are org-wide roles — they don't belong to a department
+        if (["manager", "superadmin"].includes(targetRole) && department) {
+            return res.status(400).json({
+                success: false,
+                message: `${targetRole === "manager" ? "Manager" : "Superadmin"} accounts cannot be assigned to a department`,
+            });
         }
 
         const employeeId = await generateEmployeeId(name);
@@ -140,6 +168,9 @@ const getAllUsers = async (req, res) => {
         } else if (req.user.role === "tl") {
             filter.reportingTo = req.user._id;
             filter.isDeleted = { $ne: true };
+        } else if (req.user.role === "superadmin") {
+            filter.role = { $in: ["employee", "tl", "hr", "manager", "superadmin"] };
+            filter.isDeleted = { $ne: true };
         }
 
         // Optional: only applied when the caller explicitly asks for it,
@@ -152,7 +183,7 @@ const getAllUsers = async (req, res) => {
 
         const safeUsers = users.map(user => {
             const u = user.toObject();
-            if (req.user.role !== "hr" && req.user.role !== "manager") {
+            if (!["hr", "manager", "superadmin"].includes(req.user.role)) {
                 delete u.salary;
             }
             return u;
@@ -187,27 +218,51 @@ const getAllTLs = async (req, res) => {
 const getUserList = async (req, res) => {
     try {
         const roleMap = {
-            manager: ["employee", "tl", "hr"],
+            // HR can manage employee and TL salaries.
+            // HR cannot manage another HR's salary.
             hr: ["employee", "tl"],
+
+            // Manager can manage employee, TL and HR salaries.
+            manager: ["employee", "tl", "hr"],
+
+            // Superadmin can manage employee, TL and HR salaries.
+            superadmin: ["manager", "employee", "tl", "hr"],
         };
 
         const allowedRoles = roleMap[req.user.role];
+
         if (!allowedRoles) {
             return res.status(403).json({
                 success: false,
-                message: "Access denied — only manager and HR can view employee list",
+                message: "Access denied — insufficient permission",
             });
         }
 
         const users = await User.find({
             role: { $in: allowedRoles },
-            status: { $ne: "terminated" },
-            _id: { $ne: req.user._id }, // exclude self
-        }).select("_id name employeeId role department").lean();
 
-        res.status(200).json({ success: true, users });
+            // Keep terminated users out of salary management.
+            status: { $ne: "terminated" },
+
+            // Don't show the logged-in user in the picker.
+            _id: { $ne: req.user._id },
+
+            isDeleted: { $ne: true },
+        })
+            .select("_id name employeeId role department designation status")
+            .sort({ name: 1 })
+            .lean();
+
+        res.status(200).json({
+            success: true,
+            users,
+        });
+
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        res.status(500).json({
+            success: false,
+            message: error.message,
+        });
     }
 };
 
@@ -262,7 +317,7 @@ const getSingleUser = async (req, res) => {
 
         let userData = user.toObject();
 
-        if (req.user.role !== "hr" && req.user.role !== "manager") {
+        if (!["hr", "manager", "superadmin"].includes(req.user.role)) {
             delete userData.salary;
         }
 
@@ -309,9 +364,16 @@ const unassignEmployeeFromTL = async (req, res) => {
             return res.status(400).json({ success: false, message: "employeeId is required" });
         }
 
-        const employee = await User.findById(employeeId);
+        const employee = await User.findOne({
+            _id: employeeId,
+            status: "active",
+        });
+
         if (!employee) {
-            return res.status(404).json({ success: false, message: "Employee not found" });
+            return res.status(404).json({
+                success: false,
+                message: "Employee not found or employee is not active",
+            });
         }
 
         await User.findByIdAndUpdate(employeeId, { $unset: { reportingTo: "" } });
@@ -330,6 +392,14 @@ const updateUser = async (req, res) => {
         const updates = req.body;
         const flatUpdates = { ...updates };
         delete flatUpdates.password;
+
+        // Manager / Superadmin are org-wide roles — strip department/designation
+        // if the target role is (or is being changed to) one of these.
+        const targetRole = (updates.role || "").toLowerCase();
+        if (["manager", "superadmin"].includes(targetRole)) {
+            flatUpdates.department = null;
+            flatUpdates.designation = "";
+        }
 
         if (updates.salary && typeof updates.salary === "object") {
             delete flatUpdates.salary;

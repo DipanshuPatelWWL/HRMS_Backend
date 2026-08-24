@@ -335,7 +335,7 @@ const getAssetHistory = asyncHandler(async (req, res) => {
     }
 
     const isOwner = record.employee.toString() === req.user._id.toString();
-    const isPrivileged = ["hr", "manager", "admin"].includes(req.user.role);
+    const isPrivileged = ["hr", "manager", "superadmin"].includes(req.user.role);
 
     if (!isOwner && !isPrivileged) {
         res.status(403);
@@ -348,7 +348,7 @@ const getAssetHistory = asyncHandler(async (req, res) => {
 
 // ─── @desc    Scan barcode from uploaded image
 // ─── @route   POST /api/assets/scan
-// ─── @access  Private — hr, manager, admin
+// ─── @access  Private — hr, manager, superadmin
 const scanAssetBarcode = asyncHandler(async (req, res) => {
     if (!req.file) {
         res.status(400);
